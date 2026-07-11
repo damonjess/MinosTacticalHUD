@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.preference.PreferenceManager
 import android.util.Size
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -33,9 +34,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import ai.onnxruntime.*
+import org.osmdroid.config.Configuration
 import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+
+private enum class Screen { HUD, TACTICAL_MAP }
 
 class MainActivity : ComponentActivity() {
 
@@ -54,16 +58,19 @@ class MainActivity : ComponentActivity() {
     private var autoTargetLock by mutableStateOf(true)
     private var digitalZoom by mutableStateOf(8f)
     private var motionSensitivity by mutableStateOf(36f)
-    private var sensitivityThreshold by mutableStateOf(0.50f)
+    private var sensitivityThreshold by mutableStateOf(0.35f)
     private var showDossier by mutableStateOf(false)
-    private var showSettings by mutableStateOf(false)
     private var isYoloBoxesEnabled by mutableStateOf(true)
+    private var maxDetections by mutableStateOf(15)
+    private var autoMag by mutableStateOf(false)
+    private var eyeMode by mutableIntStateOf(4)
     private var selectedTarget by mutableStateOf<MagTrackTarget?>(null)
+    private var currentScreen by mutableStateOf(Screen.HUD)
 
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
     private var hudOverlay: HUDOverlayView? = null
-    private var previewView: PreviewView? = null
+    private var previewView by mutableStateOf<PreviewView?>(null)
 
     // Simple Tracker State
     private var nextTrackId = 1
@@ -86,6 +93,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        @Suppress("DEPRECATION")
+        Configuration.getInstance().load(
+            applicationContext, 
+            PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        )
+        Configuration.getInstance().userAgentValue = packageName
+
         enableEdgeToEdge()
         setupHighPerformanceMode()
 
@@ -94,29 +109,67 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             TacticalHudTheme {
-                MainContent()
+                when (currentScreen) {
+                    Screen.HUD -> MainContent(onViewMapClick = { currentScreen = Screen.TACTICAL_MAP })
+                    Screen.TACTICAL_MAP -> TacticalMapScreen(onBack = { currentScreen = Screen.HUD })
+                }
             }
         }
 
-        requestCameraPermission()
+        requestRequiredPermissions()
+    }
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
+        if (cameraGranted) {
+            startHighPerformanceCamera()
+        } else {
+            finish()
+        }
+    }
+
+    private fun requestRequiredPermissions() {
+        val permissions = arrayOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        
+        val missingPermissions = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missingPermissions.isEmpty()) {
+            startHighPerformanceCamera()
+        } else {
+            requestPermissionLauncher.launch(permissions)
+        }
     }
 
     @Composable
-    fun MainContent() {
+    fun MainContent(onViewMapClick: () -> Unit) {
+        val context = LocalContext.current
+        
+        LaunchedEffect(previewView) {
+            if (previewView != null && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                startHighPerformanceCamera()
+            }
+        }
+
         Column(modifier = Modifier.fillMaxSize().background(Color(0xFF010408))) {
-            // 1. Top Telemetry (Absolute Isolated Block)
             IsolatedHeaderTerminalBlock(
                 currentFps = fpsValue,
-                inferenceTimeMs = inferenceValue.toInt()
+                inferenceTimeMs = inferenceValue.toInt(),
+                onViewMapClick = onViewMapClick,
+                onSettingsClick = { 
+                    activePanel = "SETTINGS"
+                    panelVisible = true
+                }
             )
 
-            // 2. Center Viewport (Camera + HUD Overlay)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                // 2a. Camera Preview
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(
                     factory = { context ->
                         PreviewView(context).also { previewView = it }
@@ -124,7 +177,6 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // 2b. HUD Overlay
                 AndroidView(
                     factory = { context ->
                         HUDOverlayView(context, null).also {
@@ -144,31 +196,180 @@ class MainActivity : ComponentActivity() {
                     }
                 )
 
-                // 2c. Floating Mag-Track Windows
                 MagTrackWindows()
             }
 
-            // 3. Bottom Terminal Panel
-            TerminalPanel()
+            TerminalPanel(onViewMapClick = onViewMapClick)
         }
 
-        // Global Overlays (Large Viewers, Settings, etc.)
         Box(modifier = Modifier.fillMaxSize()) {
-            // 4. Large Target Viewer (Panopticore Feature)
             selectedTarget?.let { target ->
                 LargeTargetViewer(target) { selectedTarget = null }
             }
 
-            // 5. Global Dialog Overlays
             if (showDossier) DossierOverlay()
-            if (showSettings) SettingsOverlay()
+        }
+    }
+
+    @Composable
+    fun SettingsContent() {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(250.dp)
+                .padding(14.dp)
+        ) {
+            Text(
+                "SYSTEM SENSITIVITY // SCANNER CALIBRATION",
+                color = Color(0xFF00E5FF),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "SCANNER SENSITIVITY",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${(sensitivityThreshold * 100).toInt()}%",
+                    color = Color(0xFF00FF66),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp
+                )
+            }
+            
+            Slider(
+                value = sensitivityThreshold,
+                onValueChange = { sensitivityThreshold = it },
+                valueRange = 0.05f..0.95f,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFF00FF66),
+                    activeTrackColor = Color(0xFF00FF66),
+                    inactiveTrackColor = Color(0xFF00FF66).copy(alpha = 0.2f)
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "MAX TARGET TRACKS",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${maxDetections}",
+                    color = Color(0xFF00FF66),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp
+                )
+            }
+            
+            Slider(
+                value = maxDetections.toFloat(),
+                onValueChange = { maxDetections = it.toInt() },
+                valueRange = 1f..50f,
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFF00FF66),
+                    activeTrackColor = Color(0xFF00FF66),
+                    inactiveTrackColor = Color(0xFF00FF66).copy(alpha = 0.2f)
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "AUTO MAGNIFICATION",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = autoMag,
+                    onCheckedChange = { autoMag = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF00FF66),
+                        checkedTrackColor = Color(0xFF00FF66).copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "RENDER YOLO BOUNDING BOXES",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = isYoloBoxesEnabled,
+                    onCheckedChange = { isYoloBoxesEnabled = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF00FF66),
+                        checkedTrackColor = Color(0xFF00FF66).copy(alpha = 0.5f)
+                    )
+                )
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            TerminalActionButton(
+                text = "CLOSE SETTINGS",
+                active = true,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                panelVisible = false
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                "DETECTION CATALOG // SUPPORTED SIGNATURES",
+                color = Color(0xFF00FF66).copy(alpha = 0.7f),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 4.dp).border(1.dp, Color(0xFF00FF66).copy(alpha = 0.2f))) {
+                val scrollState = rememberScrollState()
+                Column(modifier = Modifier.verticalScroll(scrollState).padding(8.dp)) {
+                    labels.chunked(3).forEach { rowLabels ->
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            rowLabels.forEach { label ->
+                                Text(
+                                    text = "> ${label.uppercase()}",
+                                    color = Color(0xFF00FF66).copy(alpha = 0.5f),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 8.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     @Composable
     fun MagTrackWindows() {
         Box(modifier = Modifier.fillMaxSize()) {
-            trackedTargets.forEachIndexed { index, target ->
+            trackedTargets.take(eyeMode).forEachIndexed { index, target ->
                 val alignment = when (index) {
                     0 -> Alignment.TopStart
                     1 -> Alignment.TopEnd
@@ -192,13 +393,12 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun TerminalPanel() {
+    fun TerminalPanel(onViewMapClick: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xED050C14))
         ) {
-            // Tabs
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -214,11 +414,18 @@ class MainActivity : ComponentActivity() {
                     panelVisible = true
                 }
                 PanelTabButton(
-                    text = "GPS TACTICAL MAP",
+                    text = "GPS MAP",
                     active = activePanel == "GPS" && panelVisible,
                     modifier = Modifier.weight(1f)
                 ) {
-                    activePanel = "GPS"
+                    onViewMapClick()
+                }
+                PanelTabButton(
+                    text = "SETTINGS",
+                    active = activePanel == "SETTINGS" && panelVisible,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    activePanel = "SETTINGS"
                     panelVisible = true
                 }
                 PanelTabButton(
@@ -231,10 +438,10 @@ class MainActivity : ComponentActivity() {
             }
 
             if (panelVisible) {
-                if (activePanel == "GEOLOG") {
-                    GeologContent()
-                } else {
-                    GpsTacticalMapContent()
+                when (activePanel) {
+                    "GEOLOG" -> GeologContent()
+                    "SETTINGS" -> SettingsContent()
+                    else -> GpsTacticalMapContent()
                 }
             }
         }
@@ -256,31 +463,50 @@ class MainActivity : ComponentActivity() {
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(top = 4.dp)
-            ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 TerminalActionButton(
                     text = "MOTION ARRAY\n${if (motionArrayOn) "ON" else "OFF"}",
                     active = motionArrayOn,
                     modifier = Modifier.width(130.dp).padding(end = 8.dp)
-                ) {
-                    motionArrayOn = !motionArrayOn
-                }
+                ) { motionArrayOn = !motionArrayOn }
                 TerminalActionButton(
                     text = "AUTO TARGET\n${if (autoTargetLock) "LOCK" else "UNLOCK"}",
                     active = autoTargetLock,
                     modifier = Modifier.width(130.dp).padding(end = 8.dp)
-                ) {
-                    autoTargetLock = !autoTargetLock
-                }
+                ) { autoTargetLock = !autoTargetLock }
                 TerminalActionButton(
                     text = "RADAR SWEEP\nON",
                     active = true,
                     modifier = Modifier.width(130.dp)
                 )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                TerminalActionButton(
+                    text = "AUTO MAG\n${if (autoMag) "ACTIVE" else "OFF"}",
+                    active = autoMag,
+                    modifier = Modifier.weight(1f).padding(end = 4.dp)
+                ) { autoMag = !autoMag }
+                
+                TerminalActionButton(
+                    text = "2 EYES\nMAG",
+                    active = eyeMode == 2,
+                    modifier = Modifier.weight(1f).padding(end = 4.dp)
+                ) { 
+                    eyeMode = 2
+                    digitalZoom = 2.0f
+                    cameraControl?.setZoomRatio(2.0f)
+                }
+                
+                TerminalActionButton(
+                    text = "4 EYES\nMAG",
+                    active = eyeMode == 4,
+                    modifier = Modifier.weight(1f)
+                ) { 
+                    eyeMode = 4
+                    digitalZoom = 4.0f
+                    cameraControl?.setZoomRatio(4.0f)
+                }
             }
 
             Text(
@@ -291,11 +517,7 @@ class MainActivity : ComponentActivity() {
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 12.dp)
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp)
-            ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 TerminalActionButton(text = "RENDER\nCLASSIC", active = false, modifier = Modifier.weight(1f).padding(end = 6.dp))
                 TerminalActionButton(text = "TARGET\nBIG", active = true, modifier = Modifier.weight(1f).padding(end = 6.dp))
                 TerminalActionButton(text = "TARGET\nNORMAL", active = false, modifier = Modifier.weight(1f))
@@ -343,7 +565,6 @@ class MainActivity : ComponentActivity() {
                 .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.3f))
                 .background(Color(0xFF02080F))
             ) {
-                // --- TACTICAL VECTOR MAP ---
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val w = size.width
                     val h = size.height
@@ -351,7 +572,6 @@ class MainActivity : ComponentActivity() {
                     val matrixGreen = Color(0xFF00FF66)
                     val alertAmber = Color(0xFFFFA500)
 
-                    // 1. Digital Grid Infrastructure
                     for (i in 0..10) {
                         val x = i * w / 10f
                         val y = i * h / 10f
@@ -359,55 +579,22 @@ class MainActivity : ComponentActivity() {
                         drawLine(neonCyan.copy(alpha = 0.05f), Offset(0f, y), Offset(w, y))
                     }
 
-                    // 2. Coordinate Axis Markers
-                    for (i in 1..9) {
-                        val x = i * w / 10f
-                        val y = i * h / 10f
-                        // Lat/Long style labels (mock)
-                        // Note: Using native canvas for text if needed, but here we can just draw ticks
-                        drawLine(neonCyan.copy(alpha = 0.3f), Offset(x, 0f), Offset(x, 10f), 2f)
-                        drawLine(neonCyan.copy(alpha = 0.3f), Offset(0f, y), Offset(10f, y), 2f)
-                    }
-
-                    // 3. Simulated Topographical Contours
-                    val contourPath = Path().apply {
-                        moveTo(w * 0.2f, h * 0.1f)
-                        quadraticBezierTo(w * 0.4f, h * 0.3f, w * 0.1f, h * 0.6f)
-                        quadraticBezierTo(w * 0.3f, h * 0.8f, w * 0.6f, h * 0.7f)
-                        quadraticBezierTo(w * 0.9f, h * 0.9f, w * 0.8f, h * 0.4f)
-                        quadraticBezierTo(w * 0.7f, h * 0.2f, w * 0.2f, h * 0.1f)
-                    }
-                    drawPath(contourPath, neonCyan.copy(alpha = 0.1f), style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
-
-                    // 4. Center "Home" Node (Subject Zero)
-                    drawCircle(matrixGreen, radius = 6f, center = center)
-                    drawCircle(matrixGreen.copy(alpha = 0.3f), radius = 12f, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
-                    
-                    // 5. Dynamic Target Blips (Mapped from tracked objects)
                     trackedTargets.forEach { target ->
-                        // Map 3D screen space to 2D top-down map space (simulated)
                         val mapX = target.relX * w
                         val mapY = target.relY * h
-                        
-                        // Pulse effect for targets
                         val pulse = (System.currentTimeMillis() % 1000) / 1000f
-                        
                         drawCircle(alertAmber.copy(alpha = 1f - pulse), radius = 10f + pulse * 15f, center = Offset(mapX, mapY), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5f))
                         drawCircle(alertAmber, radius = 4f, center = Offset(mapX, mapY))
-                        
-                        // Identification line
                         drawLine(alertAmber.copy(alpha = 0.4f), center, Offset(mapX, mapY), 1f)
                     }
 
-                    // 6. Perimeter Range Rings
                     drawCircle(neonCyan.copy(alpha = 0.15f), radius = w * 0.25f, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
                     drawCircle(neonCyan.copy(alpha = 0.1f), radius = w * 0.45f, center = center, style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
                 }
                 
-                // Map Legend / Data Readout
                 Column(modifier = Modifier.padding(8.dp).background(Color.Black.copy(alpha = 0.6f)).padding(4.dp)) {
                     Text("MAP_SCALE: 1:500m", color = Color(0xFF00FF66), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                    Text("GPS_LOCK: STABLE [45.89°N]", color = Color(0xFF00E5FF), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
+                    Text("GPS_LOCK: STABLE [45.89\u00b0N]", color = Color(0xFF00E5FF), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                     Text("ACTIVE_NODES: ${trackedTargets.size}", color = Color(0xFFFFA500), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
                 }
             }
@@ -420,7 +607,6 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xE6050C14))
-                .clickable { onClose() }
                 .padding(32.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -440,32 +626,13 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
                 
-                Box(modifier = Modifier
-                    .fillMaxWidth()
-                    .height(300.dp)
-                    .border(1.dp, Color(0xFFFFA500).copy(alpha = 0.5f))
-                ) {
+                Box(modifier = Modifier.fillMaxWidth().height(300.dp).border(1.dp, Color(0xFFFFA500).copy(alpha = 0.5f))) {
                     Image(
-                        bitmap = target.crop?.asImageBitmap() 
-                            ?: ImageBitmap(1, 1),
+                        bitmap = target.crop?.asImageBitmap() ?: ImageBitmap(1, 1),
                         contentDescription = null,
                         contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
                         modifier = Modifier.fillMaxSize()
                     )
-                    
-                    // Scanline Overlay for the crop
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val h = size.height
-                        val w = size.width
-                        for (i in 0 until h.toInt() step 4) {
-                            drawLine(Color.Black.copy(alpha = 0.3f), androidx.compose.ui.geometry.Offset(0f, i.toFloat()), androidx.compose.ui.geometry.Offset(w, i.toFloat()))
-                        }
-                    }
-
-                    Column(modifier = Modifier.align(Alignment.BottomStart).padding(8.dp).background(Color.Black.copy(alpha = 0.5f))) {
-                        Text("MAG: 8.0x", color = Color(0xFF00FF66), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                        Text("RES: 720p", color = Color(0xFF00FF66), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
-                    }
                 }
                 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -475,17 +642,7 @@ class MainActivity : ComponentActivity() {
                         Text(target.trackLabel, color = Color(0xFF00FF66), fontSize = 14.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                         Text(target.coordinateLabel, color = Color(0xFFFFA500), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     }
-                    Text("OBJ_ID: ${target.id}", color = Color(0xFF00E5FF), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                Text(
-                    "ANALYSIS: " + "0x" + (100000..999999).random().toString(16).uppercase() + " " + (100000..999999).random().toString(16).uppercase(),
-                    color = Color(0xFF00FF66).copy(alpha = 0.7f),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
                 
                 TerminalActionButton(
                     text = "CLOSE VIEWER",
@@ -503,7 +660,6 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xF205080E))
-                .clickable { /* consume clicks */ }
                 .padding(16.dp)
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -516,140 +672,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(bottom = 24.dp)
                 )
 
-                Box(
-                    modifier = Modifier
-                        .size(180.dp)
-                        .border(1.dp, Color(0xFF00E5FF), RoundedCornerShape(2.dp))
-                        .padding(2.dp)
-                ) {
-                    Image(
-                        painter = androidx.compose.ui.res.painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "Last target",
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
                 TerminalActionButton(
                     text = "INITIALIZE NEW SCAN SEQUENCE",
                     active = true,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     showDossier = false
-                    isScanning = true
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .background(Color(0x800D1527))
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        "--> AWAITING INTERCEPT BIOMETRIC DATA...\n--> CHOOSE CAPTURE PATTERN TO INITIATE LENS SEARCH.",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                Text(
-                    "RESET SCAN MATRIX",
-                    color = Color(0xFFFF3366),
-                    fontSize = 14.sp,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier
-                        .padding(top = 16.dp)
-                        .clickable {
-                            showDossier = false
-                            isScanning = true
-                        }
-                )
-            }
-        }
-    }
-
-    @Composable
-    fun SettingsOverlay() {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xF20D1527))
-                .clickable { /* consume clicks */ }
-                .padding(24.dp)
-        ) {
-            Column {
-                Text(
-                    "PANOPTIC ENGINE SETTINGS",
-                    color = Color(0xFF00E5FF),
-                    fontSize = 18.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
-                ) {
-                    Text(
-                        "RENDER YOLO BOUNDING BOXES",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = isYoloBoxesEnabled,
-                        onCheckedChange = { isYoloBoxesEnabled = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color(0xFF00FF66),
-                            checkedTrackColor = Color(0x4000FF66)
-                        )
-                    )
-                }
-
-                HorizontalDivider(color = Color(0x3300E5FF), modifier = Modifier.padding(bottom = 16.dp))
-
-                Column {
-                    Row {
-                        Text(
-                            "SCANNER SENSITIVITY THRESHOLD",
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            "${(sensitivityThreshold * 100).toInt()}%",
-                            color = Color(0xFF00FF66),
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                    Slider(
-                        value = sensitivityThreshold,
-                        onValueChange = { sensitivityThreshold = it },
-                        valueRange = 0.10f..0.95f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF00FF66),
-                            activeTrackColor = Color(0xFF00FF66)
-                        )
-                    )
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                TerminalActionButton(
-                    text = "APPLY CONFIGURATION",
-                    active = true,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    showSettings = false
                     isScanning = true
                 }
             }
@@ -665,25 +693,7 @@ class MainActivity : ComponentActivity() {
             or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
-
-        val layoutParams = window.attributes
-        layoutParams.screenBrightness = 1.0f
-        window.attributes = layoutParams
-    }
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) startHighPerformanceCamera() else finish()
-    }
-
-    private fun requestCameraPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == 
-            PackageManager.PERMISSION_GRANTED) {
-            startHighPerformanceCamera()
-        } else {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
+        window.attributes.screenBrightness = 1.0f
     }
 
     private fun loadONNXModel(modelName: String) {
@@ -693,61 +703,78 @@ class MainActivity : ComponentActivity() {
             assets.open(modelName).use { input ->
                 ortSession = env.createSession(input.readBytes())
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun startHighPerformanceCamera() {
+        val view = previewView ?: return
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            @Suppress("DEPRECATION")
-            val preview = Preview.Builder()
-                .setTargetResolution(Size(1080, 1920))
-                .build().also {
-                    it.setSurfaceProvider(previewView?.surfaceProvider)
-                }
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(view.surfaceProvider)
+            }
 
-            @Suppress("DEPRECATION")
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(720, 1280))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build().also {
                     it.setAnalyzer(cameraExecutor) { imageProxy ->
+                        runOnUiThread { updateFps() }
                         if (isScanning) {
                             runDetection(imageProxy)
                         } else {
-                            updateFps()
+                            imageProxy.close()
                         }
-                        imageProxy.close()
                     }
                 }
 
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-
             try {
                 cameraProvider.unbindAll()
-                val camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+                val camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis)
                 cameraControl = camera.cameraControl
                 cameraInfo = camera.cameraInfo
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
+            } catch (e: Exception) { e.printStackTrace() }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun runDetection(imageProxy: ImageProxy) {
         val startTime = System.currentTimeMillis()
-        val bitmap = imageProxy.toBitmapCustom()
+        val bitmap = try {
+            val plane = imageProxy.planes[0]
+            val buffer = plane.buffer
+            val rowStride = plane.rowStride
+            val pixelStride = plane.pixelStride
+            val bitmap = Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
+            buffer.rewind()
+            if (rowStride == imageProxy.width * pixelStride) {
+                bitmap.copyPixelsFromBuffer(buffer)
+            } else {
+                val rowSize = imageProxy.width * pixelStride
+                val cleanBuffer = java.nio.ByteBuffer.allocateDirect(rowSize * imageProxy.height)
+                val rowBytes = ByteArray(rowSize)
+                for (y in 0 until imageProxy.height) {
+                    buffer.position(y * rowStride)
+                    buffer.get(rowBytes)
+                    cleanBuffer.put(rowBytes)
+                }
+                cleanBuffer.rewind()
+                bitmap.copyPixelsFromBuffer(cleanBuffer)
+            }
+            bitmap
+        } catch (e: Exception) {
+            imageProxy.close()
+            return
+        }
+        imageProxy.close()
+
         val inputTensor = preprocessBitmap(bitmap)
 
         try {
+            val session = ortSession ?: return
             val inputs = mapOf("images" to inputTensor)
-            val outputs = ortSession?.run(inputs)
+            val outputs = session.run(inputs)
 
             if (outputs != null) {
                 val targets = postProcess(outputs, bitmap)
@@ -766,25 +793,26 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateMagTrackTargets(targets: List<YoloTarget>) {
+        if (autoMag && targets.isNotEmpty()) {
+            val bestTarget = targets.maxByOrNull { it.confidence }
+            if (bestTarget != null && bestTarget.confidence > 0.7f && digitalZoom < 2f) {
+                digitalZoom = 2f
+                cameraControl?.setZoomRatio(2f)
+            }
+        }
         val updatedTracks = mutableListOf<MagTrackTarget>()
         val unassignedTargets = targets.toMutableList()
 
-        // 1. Try to update existing tracks based on proximity
         activeTracks.forEach { track ->
             val bestMatch = unassignedTargets.minByOrNull { yolo ->
                 val dx = track.relX - (yolo.xMin + yolo.xMax) / 2f
                 val dy = track.relY - (yolo.yMin + yolo.yMax) / 2f
                 dx * dx + dy * dy
             }
-
             if (bestMatch != null) {
-                val distSq = let {
-                    val dx = track.relX - (bestMatch.xMin + bestMatch.xMax) / 2f
-                    val dy = track.relY - (bestMatch.yMin + bestMatch.yMax) / 2f
-                    dx * dx + dy * dy
-                }
-
-                if (distSq < 0.05f) { // Threshold for "same" object
+                val dx = track.relX - (bestMatch.xMin + bestMatch.xMax) / 2f
+                val dy = track.relY - (bestMatch.yMin + bestMatch.yMax) / 2f
+                if (dx * dx + dy * dy < 0.05f) {
                     unassignedTargets.remove(bestMatch)
                     updatedTracks.add(track.copy(
                         relX = (bestMatch.xMin + bestMatch.xMax) / 2f,
@@ -796,7 +824,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // 2. Create new tracks for remaining targets (up to limit)
         unassignedTargets.take(4 - updatedTracks.size).forEach { yolo ->
             updatedTracks.add(MagTrackTarget(
                 id = "TRACK-${nextTrackId++ % 1000}",
@@ -810,7 +837,6 @@ class MainActivity : ComponentActivity() {
 
         activeTracks.clear()
         activeTracks.addAll(updatedTracks)
-        
         trackedTargets.clear()
         trackedTargets.addAll(updatedTracks)
         hudOverlay?.magTrackTargets = updatedTracks
@@ -826,44 +852,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun ImageProxy.toBitmapCustom(): Bitmap {
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val buffer = planes[0].buffer
-        buffer.rewind()
-        bitmap.copyPixelsFromBuffer(buffer)
-        return bitmap
-    }
-
     private fun preprocessBitmap(bitmap: Bitmap): OnnxTensor {
         val env = OrtEnvironment.getEnvironment()
         val resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
         val tensorData = FloatBuffer.allocate(1 * 3 * 640 * 640)
-        tensorData.rewind()
-
         val pixels = IntArray(640 * 640)
         resized.getPixels(pixels, 0, 640, 0, 0, 640, 640)
-
         for (i in 0 until 640 * 640) {
             val pixel = pixels[i]
             tensorData.put(i, ((pixel shr 16) and 0xFF) / 255f)
             tensorData.put(i + 640 * 640, ((pixel shr 8) and 0xFF) / 255f)
             tensorData.put(i + 2 * 640 * 640, (pixel and 0xFF) / 255f)
         }
-
         tensorData.rewind()
-        val shape = longArrayOf(1, 3, 640, 640)
-        return OnnxTensor.createTensor(env, tensorData, shape)
+        return OnnxTensor.createTensor(env, tensorData, longArrayOf(1, 3, 640, 640))
     }
 
     private fun postProcess(outputs: OrtSession.Result, bitmap: Bitmap): List<YoloTarget> {
         val outputTensor = outputs.get(0) as OnnxTensor
         val buffer = outputTensor.floatBuffer
-        val shape = outputTensor.info.shape // [1, 84, 8400]
+        val shape = outputTensor.info.shape
         val numElements = shape[2].toInt()
         val numChannels = shape[1].toInt()
-
         val candidateTargets = mutableListOf<YoloTarget>()
-
         for (i in 0 until numElements) {
             var maxScore = 0f
             var maxClassId = -1
@@ -874,67 +885,74 @@ class MainActivity : ComponentActivity() {
                     maxClassId = c - 4
                 }
             }
-
             if (maxScore >= sensitivityThreshold) {
-                val cx = buffer.get(0 * numElements + i)
-                val cy = buffer.get(1 * numElements + i)
+                val cx = buffer.get(i)
+                val cy = buffer.get(numElements + i)
                 val w = buffer.get(2 * numElements + i)
                 val h = buffer.get(3 * numElements + i)
-
                 val xMin = (cx - w / 2f) / 640f
                 val yMin = (cy - h / 2f) / 640f
                 val xMax = (cx + w / 2f) / 640f
                 val yMax = (cy + h / 2f) / 640f
-
                 candidateTargets.add(YoloTarget(
                     id = "TGT-${candidateTargets.size}",
                     label = labels.getOrNull(maxClassId) ?: "unknown",
                     confidence = maxScore,
-                    xMin = xMin,
-                    yMin = yMin,
-                    xMax = xMax,
-                    yMax = yMax,
-                    crop = null // Crop extracted after NMS
+                    xMin = xMin, yMin = yMin, xMax = xMax, yMax = yMax
                 ))
             }
         }
-
         val nmsSelected = nms(candidateTargets)
-        
-        // Finalize top targets with tactical labels and crops
-        return nmsSelected.take(10).map { target ->
-            val finalCrop = try {
-                val left = (target.xMin.coerceIn(0f, 1f) * bitmap.width).toInt()
-                val top = (target.yMin.coerceIn(0f, 1f) * bitmap.height).toInt()
-                val width = ((target.xMax - target.xMin).coerceIn(0f, 1f) * bitmap.width).toInt().coerceAtLeast(1)
-                val height = ((target.yMax - target.yMin).coerceIn(0f, 1f) * bitmap.height).toInt().coerceAtLeast(1)
-                
-                if (left + width <= bitmap.width && top + height <= bitmap.height) {
-                    Bitmap.createBitmap(bitmap, left, top, width, height)
-                } else null
-            } catch (e: Exception) { null }
-
-            target.copy(
-                label = getTacticalLabel(target.label),
-                crop = finalCrop
-            )
+        return nmsSelected.take(maxDetections).map { target ->
+            val left = (target.xMin.coerceIn(0f, 1f) * bitmap.width).toInt()
+            val top = (target.yMin.coerceIn(0f, 1f) * bitmap.height).toInt()
+            val w = ((target.xMax - target.xMin).coerceIn(0f, 1f) * bitmap.width).toInt().coerceAtLeast(1)
+            val h = ((target.yMax - target.yMin).coerceIn(0f, 1f) * bitmap.height).toInt().coerceAtLeast(1)
+            val crop = try { Bitmap.createBitmap(bitmap, left, top, w, h) } catch (e: Exception) { null }
+            target.copy(label = getTacticalLabel(target.label), crop = crop)
         }
     }
 
     private fun getTacticalLabel(baseLabel: String): String {
-        val upper = baseLabel.uppercase()
         val randomId = (1000..9999).random()
-        return when (upper) {
-            "PERSON" -> "BIO-SIGN DETECTED // SUBJECT-${randomId}"
-            "BICYCLE", "CAR", "MOTORCYCLE", "AIRPLANE", "BUS", "TRAIN", "TRUCK", "BOAT" -> 
-                "VEHICLE INTERCEPT // CLASS-DELTA-${randomId}"
-            "CELL PHONE", "LAPTOP", "TV", "REMOTE", "KEYBOARD", "MOUSE" -> 
-                "ELECTRONIC SIGINT // OMEGA-${randomId}"
-            "BOTTLE", "CUP", "FORK", "KNIFE", "SPOON" -> 
-                "RESOURCE LOCATED // ITEM-${randomId}"
-            "CHAIR", "COUCH", "BED", "DINING TABLE" -> 
-                "STRUCTURAL ASSET // AREA-${randomId}"
-            else -> "${upper} // UNIT-${randomId}"
+        val label = baseLabel.uppercase()
+        return when {
+            label == "PERSON" -> "BIO-SIGN DETECTED // SUBJECT-${randomId}"
+            
+            label in listOf("BICYCLE", "CAR", "MOTORCYCLE", "AIRPLANE", "BUS", "TRAIN", "TRUCK", "BOAT") -> 
+                "MOBILE ASSET // CLASS-DELTA-${randomId}"
+            
+            label in listOf("BIRD", "CAT", "DOG", "HORSE", "SHEEP", "COW", "ELEPHANT", "BEAR", "ZEBRA", "GIRAFFE") -> 
+                "NON-HUMAN LIFEFORM // SPECIES-${randomId}"
+            
+            label in listOf("TV", "LAPTOP", "MOUSE", "REMOTE", "KEYBOARD", "CELL PHONE") -> 
+                "SIGINT SOURCE // OMEGA-${randomId}"
+            
+            label in listOf("MICROWAVE", "OVEN", "TOASTER", "REFRIGERATOR", "SINK", "HAIR DRIER", "TOOTHBRUSH") -> 
+                "DOMESTIC APPLIANCE // GRID-NODE-${randomId}"
+            
+            label in listOf("BOTTLE", "WINE GLASS", "CUP", "FORK", "KNIFE", "SPOON", "BOWL") -> 
+                "UTILITY TOOL // TYPE-B-${randomId}"
+            
+            label in listOf("BANANA", "APPLE", "SANDWICH", "ORANGE", "BROCCOLI", "CARROT", "HOT DOG", "PIZZA", "DONUT", "CAKE") -> 
+                "BIOLOGICAL CONSUMABLE // SAMPLE-${randomId}"
+            
+            label in listOf("CHAIR", "COUCH", "POTTED PLANT", "BED", "DINING TABLE", "TOILET") -> 
+                "FURNITURE COMPONENT // STATIC-${randomId}"
+            
+            label in listOf("BACKPACK", "UMBRELLA", "HANDBAG", "TIE", "SUITCASE") -> 
+                "EQUIPMENT LOADOUT // KIT-${randomId}"
+            
+            label in listOf("FRISBEE", "SKIS", "SNOWBOARD", "SPORTS BALL", "KITE", "BASEBALL BAT", "BASEBALL GLOVE", "SKATEBOARD", "SURFBOARD", "TENNIS RACKET") -> 
+                "KINETIC APPARATUS // MODULE-${randomId}"
+            
+            label in listOf("TRAFFIC LIGHT", "FIRE HYDRANT", "STOP SIGN", "PARKING METER", "BENCH") -> 
+                "URBAN INFRASTRUCTURE // NODE-${randomId}"
+            
+            label in listOf("BOOK", "CLOCK", "VASE", "SCISSORS", "TEDDY BEAR") -> 
+                "MISC OBJECT // UNKNOWN-CAT-${randomId}"
+            
+            else -> "${label} // UNIT-${randomId}"
         }
     }
 
@@ -946,11 +964,7 @@ class MainActivity : ComponentActivity() {
             if (active[i]) {
                 selected.add(boxes[i])
                 for (j in i + 1 until boxes.size) {
-                    if (active[j]) {
-                        if (iou(boxes[i], boxes[j]) > 0.45f) {
-                            active[j] = false
-                        }
-                    }
+                    if (active[j] && iou(boxes[i], boxes[j]) > 0.45f) active[j] = false
                 }
             }
         }
@@ -960,16 +974,7 @@ class MainActivity : ComponentActivity() {
     private fun iou(a: YoloTarget, b: YoloTarget): Float {
         val areaA = (a.xMax - a.xMin) * (a.yMax - a.yMin)
         val areaB = (b.xMax - b.xMin) * (b.yMax - b.yMin)
-
-        val intersectionLeft = maxOf(a.xMin, b.xMin)
-        val intersectionTop = maxOf(a.yMin, b.yMin)
-        val intersectionRight = minOf(a.xMax, b.xMax)
-        val intersectionBottom = minOf(a.yMax, b.yMax)
-
-        val intersectionWidth = maxOf(0f, intersectionRight - intersectionLeft)
-        val intersectionHeight = maxOf(0f, intersectionBottom - intersectionTop)
-        val intersectionArea = intersectionWidth * intersectionHeight
-
+        val intersectionArea = maxOf(0f, minOf(a.xMax, b.xMax) - maxOf(a.xMin, b.xMin)) * maxOf(0f, minOf(a.yMax, b.yMax) - maxOf(a.yMin, b.yMin))
         return intersectionArea / (areaA + areaB - intersectionArea)
     }
 
@@ -982,12 +987,5 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun TacticalHudTheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Color(0xFF00FF66),
-            background = Color(0xFF030708),
-            surface = Color(0xFF050C14)
-        ),
-        content = content
-    )
+    MaterialTheme(colorScheme = darkColorScheme(primary = Color(0xFF00FF66), background = Color(0xFF030708), surface = Color(0xFF050C14)), content = content)
 }
