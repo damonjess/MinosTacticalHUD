@@ -13,7 +13,7 @@ data class MagTrackTarget(
     // Relative coordinates (0f to 1f)
     val relX: Float,
     val relY: Float,
-    val imageUrl: String
+    val crop: Bitmap? = null
 )
 
 data class YoloTarget(
@@ -24,7 +24,8 @@ data class YoloTarget(
     val xMin: Float,
     val yMin: Float,
     val xMax: Float,
-    val yMax: Float
+    val yMax: Float,
+    val crop: Bitmap? = null
 )
 
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
@@ -59,9 +60,27 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         isAntiAlias = true
     }
 
-    private var scanProgress = 0.1f
-    private var scanDirection = 1
-    private val scanStep = 0.005f
+    private val gridPaint = Paint().apply {
+        color = Color.parseColor("#00FF66")
+        strokeWidth = 1f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+        alpha = 25 // very faint
+    }
+
+    private val scanlinePaint = Paint().apply {
+        color = Color.BLACK
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+        alpha = 40
+    }
+
+    private val telemetryPaint = Paint().apply {
+        color = Color.parseColor("#00E5FF")
+        textSize = 32f
+        isAntiAlias = true
+        typeface = Typeface.MONOSPACE
+    }
 
     private val radarPaint = Paint().apply {
         color = Color.parseColor("#00FF66")
@@ -77,8 +96,13 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         isAntiAlias = true
     }
 
+    private var scanProgress = 0.1f
+    private var scanDirection = 1
+    private val scanStep = 0.005f
+
     private var radarAngle = 0f
     private val radarStep = 2f
+    private var frameTicker = 0
 
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
@@ -106,6 +130,13 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val cy = height / 2f
         val tacticalAmber = Color.parseColor("#FFA500")
 
+        frameTicker++
+
+        // 0. Background Effects
+        drawGrid(canvas, width, height)
+        drawScanlines(canvas, width, height)
+        drawVignette(canvas, width, height)
+
         // 1. Central Targeting Reticle (Tactical Amber)
         drawCentralReticle(canvas, width, height, tacticalAmber)
 
@@ -117,6 +148,15 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
         // 4. Target Acquisition Corner Box Brackets
         drawCornerBrackets(canvas, width, height)
+
+        // 5. Side Telemetry Bars
+        drawSideTelemetry(canvas, width, height)
+
+        // 6. Top Compass (DISABLED - REPLACED BY COMPOSE HEADER)
+        // drawCompass(canvas, width, height)
+
+        // 7. Status Text (DISABLED - REPLACED BY COMPOSE PANEL)
+        // drawStatusText(canvas, width, height)
 
         when (currentReticleStyle) {
             ReticleStyle.CROSSHAIR -> drawCrosshair(canvas, cx, cy)
@@ -135,24 +175,83 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     val bottom = target.yMax * height
 
                     // Primary Target Box Bounding Rect
+                    paint.alpha = if (frameTicker % 10 < 5) 150 else 255 // Subtle flicker
                     canvas.drawRect(left, top, right, bottom, paint)
 
                     // Target Corner Brackets (Crosshair feel)
                     drawTargetBrackets(canvas, left, top, right, bottom)
 
                     // Label
+                    textPaint.color = Color.parseColor("#00FF66")
                     canvas.drawText(
                         "${target.label} [${(target.confidence * 100).toInt()}%]",
                         (left + right) / 2,
-                        top - 10,
+                        top - 15,
                         textPaint
                     )
+                    
+                    // Add some extra tech info below the box
+                    val infoText = "DIST: ${(10..99).random()}m | AZ: ${(0..359).random()}°"
+                    textPaint.textSize = 30f
+                    canvas.drawText(infoText, (left + right) / 2, bottom + 35, textPaint)
+                    textPaint.textSize = 48f
                 }
             }
         }
 
-        // 5. Draw Mag-Track Targets and Tethers
+        // 6. Draw Mag-Track Targets and Tethers
         drawMagTrackTethers(canvas, width, height)
+    }
+
+    private fun drawGrid(canvas: Canvas, w: Float, h: Float) {
+        val gridSize = 100f
+        var x = 0f
+        while (x < w) {
+            canvas.drawLine(x, 0f, x, h, gridPaint)
+            x += gridSize
+        }
+        var y = 0f
+        while (y < h) {
+            canvas.drawLine(0f, y, w, y, gridPaint)
+            y += gridSize
+        }
+    }
+
+    private fun drawScanlines(canvas: Canvas, w: Float, h: Float) {
+        var y = 0f
+        while (y < h) {
+            canvas.drawLine(0f, y, w, y, scanlinePaint)
+            y += 6f
+        }
+    }
+
+    private fun drawSideTelemetry(canvas: Canvas, w: Float, h: Float) {
+        val barWidth = 40f
+        val barHeight = h * 0.4f
+        val margin = 60f
+        
+        // Left altitude bar
+        val leftBarX = margin
+        val barTop = (h - barHeight) / 2
+        canvas.drawRect(leftBarX, barTop, leftBarX + barWidth, barTop + barHeight, telemetryPaint.apply { style = Paint.Style.STROKE; alpha = 100 })
+        
+        // Right pitch bar
+        val rightBarX = w - margin - barWidth
+        canvas.drawRect(rightBarX, barTop, rightBarX + barWidth, barTop + barHeight, telemetryPaint.apply { style = Paint.Style.STROKE; alpha = 100 })
+        
+        // Scale marks
+        telemetryPaint.style = Paint.Style.FILL
+        telemetryPaint.alpha = 255
+        for (i in 0..10) {
+            val markY = barTop + (i * barHeight / 10)
+            canvas.drawLine(leftBarX, markY, leftBarX + 15, markY, telemetryPaint)
+            canvas.drawLine(rightBarX + barWidth - 15, markY, rightBarX + barWidth, markY, telemetryPaint)
+            
+            if (i % 2 == 0) {
+                canvas.drawText("${100 - i * 10}", leftBarX + barWidth + 5, markY + 10, telemetryPaint.apply { textSize = 20f })
+            }
+        }
+        telemetryPaint.textSize = 32f
     }
 
     private fun drawCentralReticle(canvas: Canvas, w: Float, h: Float, color: Int) {
@@ -246,15 +345,77 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         canvas.drawLine(r, b - bracket, r, b, bracketPaint)
     }
 
+    private fun drawVignette(canvas: Canvas, w: Float, h: Float) {
+        val radius = Math.sqrt((w * w + h * h).toDouble()).toFloat() / 2f
+        val vignettePaint = Paint().apply {
+            isAntiAlias = true
+            shader = RadialGradient(w / 2, h / 2, radius, 
+                intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.parseColor("#80000000")),
+                floatArrayOf(0f, 0.7f, 1f),
+                Shader.TileMode.CLAMP)
+        }
+        canvas.drawRect(0f, 0f, w, h, vignettePaint)
+    }
+
     private fun drawScanningLine(canvas: Canvas, width: Float, height: Float) {
         val y = height * scanProgress
+        
+        val sweepPaint = Paint(scanPaint).apply {
+            shader = LinearGradient(0f, y - 50f, 0f, y, 
+                intArrayOf(Color.TRANSPARENT, Color.parseColor("#3300FF66"), Color.parseColor("#00FF66")),
+                floatArrayOf(0f, 0.5f, 1f),
+                Shader.TileMode.CLAMP)
+        }
+        canvas.drawRect(0f, y - 50f, width, y, sweepPaint)
         canvas.drawLine(0f, y, width, y, scanPaint)
 
         scanProgress += scanStep * scanDirection
-        if (scanProgress >= 0.9f || scanProgress <= 0.1f) {
+        if (scanProgress >= 0.95f || scanProgress <= 0.05f) {
             scanDirection *= -1
         }
         postInvalidateDelayed(16) // Aim for ~60fps animation
+    }
+
+    private fun drawCompass(canvas: Canvas, w: Float, h: Float) {
+        val cx = w / 2f
+        val topY = 60f
+        val compassWidth = w * 0.6f
+        val startX = cx - compassWidth / 2
+        
+        telemetryPaint.textAlign = Paint.Align.CENTER
+        canvas.drawLine(startX, topY, startX + compassWidth, topY, telemetryPaint)
+        
+        for (i in -45..45 step 5) {
+            val offset = (i * (compassWidth / 90f))
+            val x = cx + offset
+            val markHeight = if (i % 15 == 0) 25f else 12f
+            canvas.drawLine(x, topY, x, topY + markHeight, telemetryPaint)
+            
+            if (i % 15 == 0) {
+                val label = when(i) {
+                    0 -> "N"
+                    else -> "${(360 + i) % 360}"
+                }
+                telemetryPaint.textSize = 24f
+                canvas.drawText(label, x, topY + 55f, telemetryPaint)
+            }
+        }
+        telemetryPaint.textSize = 32f
+    }
+
+    private fun drawStatusText(canvas: Canvas, w: Float, h: Float) {
+        val margin = 60f
+        val bottomY = h - 150f
+        
+        val status = if (frameTicker % 60 < 30) "SYSTEM ACTIVE // LINK STABLE" else "SCANNING... // TRACING"
+        telemetryPaint.textAlign = Paint.Align.LEFT
+        telemetryPaint.color = Color.parseColor("#00FF66")
+        canvas.drawText(status, margin, bottomY, telemetryPaint)
+        
+        val targetCount = "TARGETS: ${targets.size}"
+        telemetryPaint.textAlign = Paint.Align.RIGHT
+        telemetryPaint.color = Color.parseColor("#00E5FF")
+        canvas.drawText(targetCount, w - margin, bottomY, telemetryPaint)
     }
 
     private fun drawCornerBrackets(canvas: Canvas, width: Float, height: Float) {

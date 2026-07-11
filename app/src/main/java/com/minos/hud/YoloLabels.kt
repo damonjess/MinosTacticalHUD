@@ -1,0 +1,10 @@
+package com.minos.hud
+
+object YoloLabels {
+    val SYSTEM_CATALOG = listOf(
+        "HARD_DRIVE_HDD", "SOLID_STATE_SSD", "RAM_MODULE_HYPERX", 
+        "REMOTE_CONTROL", "KEYBOARD_RGB", "MONITOR_DISPLAY", 
+        "MOTHERBOARD_PCB", "CPU_CHIP", "INTEGRATED_CIRCUIT", 
+        "USB_PERIPHERAL", "HUMAN_ASSET", "INTERFACE_TERMINAL"
+    )
+}
