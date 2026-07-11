@@ -26,7 +26,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar"
+        android:hardwareAccelerated="true"
+        android:largeHeap="true"
+        android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
+
+        <!-- Tell system this is a high-performance app -->
+        <meta-data android:name="android.app.prop" android:value="ro.vendor.gt_library=libGLES_mali.so" />
 
         <activity
             android:name=".MainActivity"
