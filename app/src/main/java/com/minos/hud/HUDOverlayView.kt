@@ -9,21 +9,21 @@ import ai.onnxruntime.OrtSession
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
     private val paint = Paint().apply {
-        color = Color.parseColor("#00FF00")  // Bright tactical green
+        color = Color.parseColor("#00FF66")  // panoptic_neon_green
         strokeWidth = 5f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
 
     private val textPaint = Paint().apply {
-        color = Color.parseColor("#00FF00")
+        color = Color.parseColor("#00FF66")
         textSize = 48f
         isAntiAlias = true
         textAlign = Paint.Align.CENTER
     }
 
     private val centerPaint = Paint().apply {
-        color = Color.parseColor("#00FF41")
+        color = Color.parseColor("#00E5FF")  // panoptic_neon_cyan
         strokeWidth = 3f
         style = Paint.Style.STROKE
         isAntiAlias = true

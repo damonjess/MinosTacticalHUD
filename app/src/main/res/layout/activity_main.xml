@@ -28,7 +28,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:background="#80000000"
+        android:background="#A60D1527"
         android:orientation="vertical"
         android:padding="8dp"
         app:layout_constraintStart_toStartOf="parent"
@@ -39,7 +39,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="FPS: 0"
-            android:textColor="#00FF00"
+            android:textColor="#00FF66"
             android:textSize="12sp"
             android:textStyle="bold" />
 
@@ -48,7 +48,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="INF: 0ms"
-            android:textColor="#00FF00"
+            android:textColor="#00FF66"
             android:textSize="12sp"
             android:textStyle="bold" />
     </LinearLayout>
@@ -75,8 +75,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:text="SCAN: ON"
-                android:textColor="#00FF00"
-                app:strokeColor="#00FF00" />
+                android:textColor="#00FF66"
+                app:strokeColor="#00FF66" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnCycleReticle"
@@ -85,8 +85,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:text="RETICLE"
-                android:textColor="#00FF00"
-                app:strokeColor="#00FF00" />
+                android:textColor="#00FF66"
+                app:strokeColor="#00FF66" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnToggleTorch"
@@ -95,8 +95,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:text="TORCH"
-                android:textColor="#00FF00"
-                app:strokeColor="#00FF00" />
+                android:textColor="#00FF66"
+                app:strokeColor="#00FF66" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnZoom"
@@ -105,8 +105,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
                 android:text="ZOOM: 1X"
-                android:textColor="#00FF00"
-                app:strokeColor="#00FF00" />
+                android:textColor="#00FF66"
+                app:strokeColor="#00FF66" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSwitchModel"
@@ -114,8 +114,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="MODEL: NANO"
-                android:textColor="#00FF00"
-                app:strokeColor="#00FF00" />
+                android:textColor="#00FF66"
+                app:strokeColor="#00FF66" />
 
         </LinearLayout>
     </HorizontalScrollView>
