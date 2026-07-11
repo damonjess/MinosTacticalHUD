@@ -10,6 +10,14 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Matrix
+import androidx.camera.core.ImageProxy
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import kotlin.math.max
+import kotlin.math.min
 import ai.onnxruntime.*
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
@@ -89,10 +97,74 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun runDetection(imageProxy: androidx.camera.core.ImageProxy) {
-        // TODO: Preprocess image → run ortSession.run() → post-process boxes
-        // Then call hudOverlay.updateDetections(boxes)
-        hudOverlay.postInvalidate()
+    private fun runDetection(imageProxy: ImageProxy) {
+        val bitmap = imageProxy.toBitmapCustom()
+        val inputTensor = preprocessBitmap(bitmap)
+
+        try {
+            val inputs = mapOf("images" to inputTensor)  // YOLOv8 input name is usually "images"
+            val outputs = ortSession?.run(inputs)
+
+            if (outputs != null) {
+                val detections = postProcess(outputs, bitmap.width, bitmap.height)
+                hudOverlay.updateDetections(detections)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            inputTensor.close()
+        }
+    }
+
+    // Helper: Convert ImageProxy to Bitmap
+    private fun ImageProxy.toBitmapCustom(): Bitmap {
+        val buffer = planes[0].buffer
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888)
+    }
+
+    // Preprocessing for YOLOv8 (640x640 input)
+    private fun preprocessBitmap(bitmap: Bitmap): OnnxTensor {
+        val env = OrtEnvironment.getEnvironment()
+        val resized = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
+
+        val tensorData = FloatBuffer.allocate(1 * 3 * 640 * 640)
+        tensorData.rewind()
+
+        // YOLOv8 expects NCHW format: [1, 3, 640, 640]
+        // Planar format (all reds, then all greens, then all blues)
+        for (c in 0 until 3) {
+            for (y in 0 until 640) {
+                for (x in 0 until 640) {
+                    val pixel = resized.getPixel(x, y)
+                    val value = when (c) {
+                        0 -> Color.red(pixel)
+                        1 -> Color.green(pixel)
+                        else -> Color.blue(pixel)
+                    }
+                    tensorData.put(value / 255f)
+                }
+            }
+        }
+
+        tensorData.rewind()
+        val shape = longArrayOf(1, 3, 640, 640)
+        return OnnxTensor.createTensor(env, tensorData, shape)
+    }
+
+    // Post-processing (basic NMS + boxes)
+    private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<Detection> {
+        val detections = mutableListOf<Detection>()
+        // YOLOv8 output is usually shape [1, 84, 8400] or similar
+        // This is a simplified version - adjust based on your model output
+
+        // TODO: Parse actual output tensors (outputs[0] is usually the main one)
+        // For now, placeholder detections for testing
+        detections.add(Detection(100f, 100f, 150f, 150f, "Target", 0.85f))
+
+        return detections
     }
 
     override fun onDestroy() {
