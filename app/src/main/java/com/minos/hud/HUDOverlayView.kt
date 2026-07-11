@@ -6,6 +6,16 @@ import android.util.AttributeSet
 import android.view.View
 import ai.onnxruntime.OrtSession
 
+data class MagTrackTarget(
+    val id: String,
+    val trackLabel: String,
+    val coordinateLabel: String,
+    // Relative coordinates (0f to 1f)
+    val relX: Float,
+    val relY: Float,
+    val imageUrl: String
+)
+
 data class YoloTarget(
     val id: String,
     val label: String,
@@ -53,6 +63,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private var scanDirection = 1
     private val scanStep = 0.005f
 
+    var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
     var currentReticleStyle: ReticleStyle = ReticleStyle.CROSSHAIR
     var isYoloBoxesEnabled: Boolean = true

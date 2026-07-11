@@ -58,6 +58,21 @@ class MainActivity : ComponentActivity() {
     private var frameCount = 0
     private var sensitivityThreshold = 0.50f
 
+    // Tactical HUD State (Mag-Track)
+    private var digitalZoom = 8f
+    private var motionSensitivity = 36f
+    private var activePanel = "GEOLOG"
+    private var motionArrayOn = true
+    private var autoTargetLock = true
+    private var targetViewMode = "BIG"
+
+    private val trackedTargets = listOf(
+        MagTrackTarget("TRACK-01", "AUTO MAG-TRACK // TRACK-01", "X80 Y543 A1 TARGET", 0.28f, 0.32f, "https://picsum.photos/seed/t1/200/150"),
+        MagTrackTarget("TRACK-02", "AUTO MAG-TRACK // TRACK-02", "X122 Y324 A3 FILTER", 0.48f, 0.35f, "https://picsum.photos/seed/t2/200/150"),
+        MagTrackTarget("TRACK-03", "AUTO MAG-TRACK // TRACK-03", "X116 Y204 A9 Z:19%", 0.18f, 0.74f, "https://picsum.photos/seed/t3/200/150"),
+        MagTrackTarget("TRACK-04", "AUTO MAG-TRACK // TRACK-04", "X304 Y214 Z4 Z:12%", 0.83f, 0.74f, "https://picsum.photos/seed/t4/200/150")
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
