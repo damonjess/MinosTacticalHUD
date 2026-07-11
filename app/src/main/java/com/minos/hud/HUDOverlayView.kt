@@ -55,6 +55,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     var targets: List<YoloTarget> = emptyList()
     var currentReticleStyle: ReticleStyle = ReticleStyle.CROSSHAIR
+    var isYoloBoxesEnabled: Boolean = true
+    var sensitivityThreshold: Float = 0.5f
 
     enum class ReticleStyle {
         CROSSHAIR, CIRCLE, MILITARY, FIGHTER_JET
@@ -89,22 +91,52 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         }
 
         // Draw targets using normalized coordinates
-        for (target in targets) {
-            val left = target.xMin * width
-            val top = target.yMin * height
-            val right = target.xMax * width
-            val bottom = target.yMax * height
+        if (isYoloBoxesEnabled) {
+            for (target in targets) {
+                if (target.confidence >= sensitivityThreshold) {
+                    val left = target.xMin * width
+                    val top = target.yMin * height
+                    val right = target.xMax * width
+                    val bottom = target.yMax * height
 
-            canvas.drawRect(left, top, right, bottom, paint)
+                    // Primary Target Box Bounding Rect
+                    canvas.drawRect(left, top, right, bottom, paint)
 
-            // Label
-            canvas.drawText(
-                "${target.label} [${(target.confidence * 100).toInt()}%]",
-                (left + right) / 2,
-                top - 10,
-                textPaint
-            )
+                    // Target Corner Brackets (Crosshair feel)
+                    drawTargetBrackets(canvas, left, top, right, bottom)
+
+                    // Label
+                    canvas.drawText(
+                        "${target.label} [${(target.confidence * 100).toInt()}%]",
+                        (left + right) / 2,
+                        top - 10,
+                        textPaint
+                    )
+                }
+            }
         }
+    }
+
+    private fun drawTargetBrackets(canvas: Canvas, l: Float, t: Float, r: Float, b: Float) {
+        val bracket = 20f
+        val alertRed = Color.parseColor("#FF3366")
+        val bracketPaint = Paint(paint).apply {
+            color = alertRed
+            strokeWidth = 5f
+        }
+
+        // Top-Left
+        canvas.drawLine(l, t, l + bracket, t, bracketPaint)
+        canvas.drawLine(l, t, l, t + bracket, bracketPaint)
+        // Top-Right
+        canvas.drawLine(r - bracket, t, r, t, bracketPaint)
+        canvas.drawLine(r, t, r, t + bracket, bracketPaint)
+        // Bottom-Left
+        canvas.drawLine(l, b - bracket, l, b, bracketPaint)
+        canvas.drawLine(l + bracket, b, l, b, bracketPaint)
+        // Bottom-Right
+        canvas.drawLine(r - bracket, b, r, b, bracketPaint)
+        canvas.drawLine(r, b - bracket, r, b, bracketPaint)
     }
 
     private fun drawScanningLine(canvas: Canvas, width: Float, height: Float) {

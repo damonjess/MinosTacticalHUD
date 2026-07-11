@@ -127,6 +127,16 @@
                 app:strokeColor="#00FF66" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSettings"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:text="SETTINGS"
+                android:textColor="#00E5FF"
+                app:strokeColor="#00E5FF" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnSwitchModel"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
@@ -140,5 +150,8 @@
 
     <!-- Inclusion of Dossier Overlay -->
     <include layout="@layout/layout_dossier_overlay" />
+
+    <!-- Inclusion of Settings Overlay -->
+    <include layout="@layout/layout_settings_overlay" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

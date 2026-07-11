@@ -39,9 +39,15 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnToggleTorch: MaterialButton
     private lateinit var btnZoom: MaterialButton
     private lateinit var btnSwitchModel: MaterialButton
+    private lateinit var btnSettings: MaterialButton
     private lateinit var dossierOverlay: View
+    private lateinit var settingsOverlay: View
     private lateinit var btnCloseDossier: View
+    private lateinit var btnCloseSettings: View
     private lateinit var btnNewScan: View
+    private lateinit var switchBoundingBoxes: androidx.appcompat.widget.SwitchCompat
+    private lateinit var seekBarSensitivity: android.widget.SeekBar
+    private lateinit var txtSensitivityValue: TextView
 
     // State
     private var isScanning = true
@@ -65,9 +71,15 @@ class MainActivity : ComponentActivity() {
         btnToggleTorch = findViewById(R.id.btnToggleTorch)
         btnZoom = findViewById(R.id.btnZoom)
         btnSwitchModel = findViewById(R.id.btnSwitchModel)
+        btnSettings = findViewById(R.id.btnSettings)
         dossierOverlay = findViewById(R.id.dossierOverlay)
+        settingsOverlay = findViewById(R.id.settingsOverlay)
         btnCloseDossier = findViewById(R.id.btnCloseDossier)
+        btnCloseSettings = findViewById(R.id.btnCloseSettings)
         btnNewScan = findViewById(R.id.btnNewScan)
+        switchBoundingBoxes = findViewById(R.id.switchBoundingBoxes)
+        seekBarSensitivity = findViewById(R.id.seekBarSensitivity)
+        txtSensitivityValue = findViewById(R.id.txtSensitivityValue)
 
         setupHighPerformanceMode()
         setupListeners()
@@ -112,6 +124,33 @@ class MainActivity : ComponentActivity() {
             loadONNXModel(currentModel)
             btnSwitchModel.text = "MODEL: ${if (currentModel.contains("v8")) "V8" else "V26"}"
         }
+
+        btnSettings.setOnClickListener {
+            isScanning = false
+            settingsOverlay.visibility = View.VISIBLE
+        }
+
+        btnCloseSettings.setOnClickListener {
+            settingsOverlay.visibility = View.GONE
+            isScanning = true
+        }
+
+        switchBoundingBoxes.setOnCheckedChangeListener { _, isChecked ->
+            hudOverlay.isYoloBoxesEnabled = isChecked
+            hudOverlay.postInvalidate()
+        }
+
+        seekBarSensitivity.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val value = progress.coerceAtLeast(10)
+                sensitivityThreshold = value / 100f
+                hudOverlay.sensitivityThreshold = sensitivityThreshold
+                txtSensitivityValue.text = "$value%"
+                hudOverlay.postInvalidate()
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
 
         // Dossier Control Listeners
         hudOverlay.setOnClickListener {
