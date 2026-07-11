@@ -9,12 +9,14 @@ import android.os.Bundle
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import ai.onnxruntime.*
+import com.google.android.material.button.MaterialButton
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
@@ -26,6 +28,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var hudOverlay: HUDOverlayView
     private var ortSession: OrtSession? = null
     private lateinit var cameraExecutor: ExecutorService
+    private var cameraControl: CameraControl? = null
+    private var cameraInfo: CameraInfo? = null
+
+    // UI Elements
+    private lateinit var fpsText: TextView
+    private lateinit var inferenceText: TextView
+    private lateinit var btnToggleDetection: MaterialButton
+    private lateinit var btnCycleReticle: MaterialButton
+    private lateinit var btnToggleTorch: MaterialButton
+    private lateinit var btnZoom: MaterialButton
+    private lateinit var btnSwitchModel: MaterialButton
+
+    // State
+    private var isScanning = true
+    private var isTorchOn = false
+    private var currentZoom = 1f
+    private var currentModel = "yolov8n.onnx"
+    private var lastFpsUpdateTime = 0L
+    private var frameCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,14 +54,57 @@ class MainActivity : ComponentActivity() {
 
         previewView = findViewById(R.id.previewView)
         hudOverlay = findViewById(R.id.hudOverlay)
+        fpsText = findViewById(R.id.fpsText)
+        inferenceText = findViewById(R.id.inferenceText)
+        btnToggleDetection = findViewById(R.id.btnToggleDetection)
+        btnCycleReticle = findViewById(R.id.btnCycleReticle)
+        btnToggleTorch = findViewById(R.id.btnToggleTorch)
+        btnZoom = findViewById(R.id.btnZoom)
+        btnSwitchModel = findViewById(R.id.btnSwitchModel)
 
-        // Max performance settings for Magic 8 Pro
         setupHighPerformanceMode()
+        setupListeners()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         requestCameraPermission()
-        loadONNXModel()
+        loadONNXModel(currentModel)
+    }
+
+    private fun setupListeners() {
+        btnToggleDetection.setOnClickListener {
+            isScanning = !isScanning
+            btnToggleDetection.text = if (isScanning) "SCAN: ON" else "SCAN: OFF"
+            if (!isScanning) hudOverlay.updateDetections(emptyList())
+        }
+
+        btnCycleReticle.setOnClickListener {
+            val styles = HUDOverlayView.ReticleStyle.values()
+            val nextIndex = (hudOverlay.currentReticleStyle.ordinal + 1) % styles.size
+            hudOverlay.currentReticleStyle = styles[nextIndex]
+            hudOverlay.postInvalidate()
+        }
+
+        btnToggleTorch.setOnClickListener {
+            isTorchOn = !isTorchOn
+            cameraControl?.enableTorch(isTorchOn)
+        }
+
+        btnZoom.setOnClickListener {
+            currentZoom = when (currentZoom) {
+                1f -> 2f
+                2f -> 5f
+                else -> 1f
+            }
+            cameraControl?.setZoomRatio(currentZoom)
+            btnZoom.text = "ZOOM: ${currentZoom.toInt()}X"
+        }
+
+        btnSwitchModel.setOnClickListener {
+            currentModel = if (currentModel == "yolov8n.onnx") "yolo26n.onnx" else "yolov8n.onnx"
+            loadONNXModel(currentModel)
+            btnSwitchModel.text = "MODEL: ${if (currentModel.contains("v8")) "V8" else "V26"}"
+        }
     }
 
     private fun setupHighPerformanceMode() {
@@ -53,7 +117,6 @@ class MainActivity : ComponentActivity() {
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
 
-        // High brightness for outdoor/HUD use
         val layoutParams = window.attributes
         layoutParams.screenBrightness = 1.0f
         window.attributes = layoutParams
@@ -74,10 +137,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadONNXModel() {
+    private fun loadONNXModel(modelName: String) {
         try {
+            ortSession?.close()
             val env = OrtEnvironment.getEnvironment()
-            assets.open("yolov8n.onnx").use { input ->
+            assets.open(modelName).use { input ->
                 ortSession = env.createSession(input.readBytes())
             }
             hudOverlay.setSession(ortSession)
@@ -93,19 +157,23 @@ class MainActivity : ComponentActivity() {
 
             @Suppress("DEPRECATION")
             val preview = Preview.Builder()
-                .setTargetResolution(Size(1080, 1920))  // High res Portrait
+                .setTargetResolution(Size(1080, 1920))
                 .build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             @Suppress("DEPRECATION")
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(720, 1280))   // Balanced for AI speed Portrait
+                .setTargetResolution(Size(720, 1280))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build().also {
                     it.setAnalyzer(cameraExecutor) { imageProxy ->
-                        runDetection(imageProxy)
+                        if (isScanning) {
+                            runDetection(imageProxy)
+                        } else {
+                            updateFps()
+                        }
                         imageProxy.close()
                     }
                 }
@@ -115,9 +183,8 @@ class MainActivity : ComponentActivity() {
             try {
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
-
-                // Enable highest frame rate possible
-                camera.cameraControl.setLinearZoom(0f)
+                cameraControl = camera.cameraControl
+                cameraInfo = camera.cameraInfo
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -126,6 +193,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun runDetection(imageProxy: ImageProxy) {
+        val startTime = System.currentTimeMillis()
         val bitmap = imageProxy.toBitmapCustom()
         val inputTensor = preprocessBitmap(bitmap)
 
@@ -135,12 +203,30 @@ class MainActivity : ComponentActivity() {
 
             if (outputs != null) {
                 val detections = postProcess(outputs, bitmap.width, bitmap.height)
-                hudOverlay.updateDetections(detections)
+                runOnUiThread {
+                    hudOverlay.updateDetections(detections)
+                    val inferenceTime = System.currentTimeMillis() - startTime
+                    inferenceText.text = "INF: ${inferenceTime}ms"
+                    updateFps()
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         } finally {
             inputTensor.close()
+        }
+    }
+
+    private fun updateFps() {
+        frameCount++
+        val now = System.currentTimeMillis()
+        if (now - lastFpsUpdateTime >= 1000) {
+            val fps = frameCount
+            runOnUiThread {
+                fpsText.text = "FPS: $fps"
+            }
+            frameCount = 0
+            lastFpsUpdateTime = now
         }
     }
 
@@ -179,8 +265,12 @@ class MainActivity : ComponentActivity() {
 
     private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<Detection> {
         val detections = mutableListOf<Detection>()
-        // Simplified version
-        detections.add(Detection(100f, 100f, 150f, 150f, "Target", 0.85f))
+        // Simulated detections for visual feedback
+        if (System.currentTimeMillis() % 2 == 0L) {
+            detections.add(Detection(200f, 400f, 300f, 300f, "Hostile", 0.92f))
+        } else {
+            detections.add(Detection(500f, 800f, 200f, 250f, "Humanoid", 0.78f))
+        }
         return detections
     }
 
