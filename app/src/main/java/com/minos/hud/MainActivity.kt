@@ -93,14 +93,14 @@ class MainActivity : ComponentActivity() {
 
             @Suppress("DEPRECATION")
             val preview = Preview.Builder()
-                .setTargetResolution(Size(1920, 1080))  // High res
+                .setTargetResolution(Size(1080, 1920))  // High res Portrait
                 .build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             @Suppress("DEPRECATION")
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(1280, 720))   // Balanced for AI speed
+                .setTargetResolution(Size(720, 1280))   // Balanced for AI speed Portrait
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build().also {
