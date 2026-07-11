@@ -6,6 +6,17 @@ import android.util.AttributeSet
 import android.view.View
 import ai.onnxruntime.OrtSession
 
+data class YoloTarget(
+    val id: String,
+    val label: String,
+    val confidence: Float,
+    // Normalized coordinates (0.0f to 1.0f) relative to screen space
+    val xMin: Float,
+    val yMin: Float,
+    val xMax: Float,
+    val yMax: Float
+)
+
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
     private val paint = Paint().apply {
@@ -42,7 +53,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private var scanDirection = 1
     private val scanStep = 0.005f
 
-    var detections: List<Detection> = emptyList()
+    var targets: List<YoloTarget> = emptyList()
     var currentReticleStyle: ReticleStyle = ReticleStyle.CROSSHAIR
 
     enum class ReticleStyle {
@@ -51,8 +62,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     fun setSession(session: OrtSession?) { /* keep for future */ }
 
-    fun updateDetections(newDetections: List<Detection>) {
-        detections = newDetections
+    fun updateTargets(newTargets: List<YoloTarget>) {
+        targets = newTargets
         postInvalidate()
     }
 
@@ -77,15 +88,20 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             ReticleStyle.FIGHTER_JET -> drawFighterJetHUD(canvas, cx, cy)
         }
 
-        // Draw detections
-        for (det in detections) {
-            canvas.drawRect(det.x, det.y, det.x + det.width, det.y + det.height, paint)
+        // Draw targets using normalized coordinates
+        for (target in targets) {
+            val left = target.xMin * width
+            val top = target.yMin * height
+            val right = target.xMax * width
+            val bottom = target.yMax * height
+
+            canvas.drawRect(left, top, right, bottom, paint)
 
             // Label
             canvas.drawText(
-                "${det.label} ${(det.confidence * 100).toInt()}%",
-                det.x + det.width / 2,
-                det.y - 10,
+                "${target.label} [${(target.confidence * 100).toInt()}%]",
+                (left + right) / 2,
+                top - 10,
                 textPaint
             )
         }

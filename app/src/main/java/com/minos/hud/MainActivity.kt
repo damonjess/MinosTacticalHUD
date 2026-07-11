@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private var currentModel = "yolov8n.onnx"
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
+    private var sensitivityThreshold = 0.50f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,7 +82,7 @@ class MainActivity : ComponentActivity() {
         btnToggleDetection.setOnClickListener {
             isScanning = !isScanning
             btnToggleDetection.text = if (isScanning) "SCAN: ON" else "SCAN: OFF"
-            if (!isScanning) hudOverlay.updateDetections(emptyList())
+            if (!isScanning) hudOverlay.updateTargets(emptyList())
         }
 
         btnCycleReticle.setOnClickListener {
@@ -228,9 +229,9 @@ class MainActivity : ComponentActivity() {
             val outputs = ortSession?.run(inputs)
 
             if (outputs != null) {
-                val detections = postProcess(outputs, bitmap.width, bitmap.height)
+                val targets = postProcess(outputs, bitmap.width, bitmap.height)
                 runOnUiThread {
-                    hudOverlay.updateDetections(detections)
+                    hudOverlay.updateTargets(targets)
                     val inferenceTime = System.currentTimeMillis() - startTime
                     inferenceText.text = "INF: ${inferenceTime}ms"
                     updateFps()
@@ -289,16 +290,20 @@ class MainActivity : ComponentActivity() {
         return OnnxTensor.createTensor(env, tensorData, shape)
     }
 
-    private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<Detection> {
-        val detections = mutableListOf<Detection>()
-        // Simulated detections with realistic biometric naming tags
+    private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<YoloTarget> {
+        val targets = mutableListOf<YoloTarget>()
+        // Simulated targets with normalized coordinates and biometric tags
         val randomId = (1000..9999).random()
+        
+        // Mocking live telemetry feed logic
         if (System.currentTimeMillis() % 2 == 0L) {
-            detections.add(Detection(200f, 400f, 300f, 300f, "SUBJECT RECON // SIGMA-$randomId", 0.92f))
+            targets.add(YoloTarget("TGT-01", "SUBJECT RECON // SIGMA-$randomId", 0.92f, 0.2f, 0.25f, 0.5f, 0.65f))
         } else {
-            detections.add(Detection(500f, 800f, 200f, 250f, "INTEL TRACE // DELTA-$randomId", 0.78f))
+            targets.add(YoloTarget("TGT-02", "INTEL TRACE // DELTA-$randomId", 0.78f, 0.6f, 0.15f, 0.85f, 0.45f))
         }
-        return detections
+
+        // Filter by sensitivityThreshold
+        return targets.filter { it.confidence >= sensitivityThreshold }
     }
 
     override fun onDestroy() {
