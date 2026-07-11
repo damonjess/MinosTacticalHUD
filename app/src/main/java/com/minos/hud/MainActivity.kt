@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.graphics.Matrix
 import android.os.Bundle
 import android.util.Size
 import android.view.View
@@ -31,15 +30,37 @@ class MainActivity : ComponentActivity() {
     private var cameraControl: CameraControl? = null
     private var cameraInfo: CameraInfo? = null
 
-    // UI Elements
+    // UI Elements - Status
     private lateinit var fpsText: TextView
     private lateinit var inferenceText: TextView
-    private lateinit var btnToggleDetection: MaterialButton
-    private lateinit var btnCycleReticle: MaterialButton
-    private lateinit var btnToggleTorch: MaterialButton
-    private lateinit var btnZoom: MaterialButton
-    private lateinit var btnSwitchModel: MaterialButton
-    private lateinit var btnSettings: MaterialButton
+
+    // UI Elements - Terminal Tabs
+    private lateinit var tabGeolog: TextView
+    private lateinit var tabGps: TextView
+    private lateinit var tabClose: TextView
+    private lateinit var panelContent: View
+
+    // UI Elements - Action Buttons
+    private lateinit var btnMotionArray: MaterialButton
+    private lateinit var btnAutoLock: MaterialButton
+    private lateinit var btnRadarSweep: MaterialButton
+    private lateinit var btnRenderClassic: MaterialButton
+    private lateinit var btnTargetBig: MaterialButton
+    private lateinit var btnTargetNormal: MaterialButton
+
+    // UI Elements - Hardware Matrix Sliders
+    private lateinit var seekBarZoom: android.widget.SeekBar
+    private lateinit var seekBarMotion: android.widget.SeekBar
+    private lateinit var txtZoomLabel: TextView
+    private lateinit var txtMotionLabel: TextView
+
+    // UI Elements - Floating Sub-Windows
+    private lateinit var magTrack01: View
+    private lateinit var magTrack02: View
+    private lateinit var magTrack03: View
+    private lateinit var magTrack04: View
+
+    // UI Elements - Overlays
     private lateinit var dossierOverlay: View
     private lateinit var settingsOverlay: View
     private lateinit var btnCloseDossier: View
@@ -51,8 +72,6 @@ class MainActivity : ComponentActivity() {
 
     // State
     private var isScanning = true
-    private var isTorchOn = false
-    private var currentZoom = 1f
     private var currentModel = "yolov8n.onnx"
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
@@ -77,16 +96,34 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // Initialize UI
         previewView = findViewById(R.id.previewView)
         hudOverlay = findViewById(R.id.hudOverlay)
         fpsText = findViewById(R.id.fpsText)
         inferenceText = findViewById(R.id.inferenceText)
-        btnToggleDetection = findViewById(R.id.btnToggleDetection)
-        btnCycleReticle = findViewById(R.id.btnCycleReticle)
-        btnToggleTorch = findViewById(R.id.btnToggleTorch)
-        btnZoom = findViewById(R.id.btnZoom)
-        btnSwitchModel = findViewById(R.id.btnSwitchModel)
-        btnSettings = findViewById(R.id.btnSettings)
+
+        tabGeolog = findViewById(R.id.tabGeolog)
+        tabGps = findViewById(R.id.tabGps)
+        tabClose = findViewById(R.id.tabClose)
+        panelContent = findViewById(R.id.panelContent)
+
+        btnMotionArray = findViewById(R.id.btnMotionArray)
+        btnAutoLock = findViewById(R.id.btnAutoLock)
+        btnRadarSweep = findViewById(R.id.btnRadarSweep)
+        btnRenderClassic = findViewById(R.id.btnRenderClassic)
+        btnTargetBig = findViewById(R.id.btnTargetBig)
+        btnTargetNormal = findViewById(R.id.btnTargetNormal)
+
+        seekBarZoom = findViewById(R.id.seekBarZoom)
+        seekBarMotion = findViewById(R.id.seekBarMotion)
+        txtZoomLabel = findViewById(R.id.txtZoomLabel)
+        txtMotionLabel = findViewById(R.id.txtMotionLabel)
+
+        magTrack01 = findViewById(R.id.magTrack01)
+        magTrack02 = findViewById(R.id.magTrack02)
+        magTrack03 = findViewById(R.id.magTrack03)
+        magTrack04 = findViewById(R.id.magTrack04)
+
         dossierOverlay = findViewById(R.id.dossierOverlay)
         settingsOverlay = findViewById(R.id.settingsOverlay)
         btnCloseDossier = findViewById(R.id.btnCloseDossier)
@@ -98,6 +135,8 @@ class MainActivity : ComponentActivity() {
 
         setupHighPerformanceMode()
         setupListeners()
+        updateTabStyles()
+        updateMagTrackUI()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -106,43 +145,66 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun setupListeners() {
-        btnToggleDetection.setOnClickListener {
-            isScanning = !isScanning
-            btnToggleDetection.text = if (isScanning) "SCAN: ON" else "SCAN: OFF"
-            if (!isScanning) hudOverlay.updateTargets(emptyList())
+        tabGeolog.setOnClickListener {
+            activePanel = "GEOLOG"
+            panelContent.visibility = View.VISIBLE
+            updateTabStyles()
+        }
+        tabGps.setOnClickListener {
+            activePanel = "GPS"
+            panelContent.visibility = View.VISIBLE
+            updateTabStyles()
+        }
+        tabClose.setOnClickListener {
+            panelContent.visibility = View.GONE
+            updateTabStyles()
         }
 
-        btnCycleReticle.setOnClickListener {
-            val styles = HUDOverlayView.ReticleStyle.values()
-            val nextIndex = (hudOverlay.currentReticleStyle.ordinal + 1) % styles.size
-            hudOverlay.currentReticleStyle = styles[nextIndex]
-            hudOverlay.postInvalidate()
+        btnMotionArray.setOnClickListener {
+            motionArrayOn = !motionArrayOn
+            btnMotionArray.text = "MOTION ARRAY\n${if (motionArrayOn) "ON" else "OFF"}"
         }
 
-        btnToggleTorch.setOnClickListener {
-            isTorchOn = !isTorchOn
-            cameraControl?.enableTorch(isTorchOn)
+        btnAutoLock.setOnClickListener {
+            autoTargetLock = !autoTargetLock
+            btnAutoLock.text = "AUTO TARGET\n${if (autoTargetLock) "LOCK" else "UNLOCK"}"
         }
 
-        btnZoom.setOnClickListener {
-            currentZoom = when (currentZoom) {
-                1f -> 2f
-                2f -> 5f
-                else -> 1f
+        btnRadarSweep.setOnClickListener {
+            // Radar animation is internal to HUDOverlayView
+        }
+
+        btnRenderClassic.setOnClickListener { targetViewMode = "CLASSIC" }
+        btnTargetBig.setOnClickListener { targetViewMode = "BIG" }
+        btnTargetNormal.setOnClickListener { targetViewMode = "NORMAL" }
+
+        seekBarZoom.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                digitalZoom = progress.coerceAtLeast(1).toFloat()
+                cameraControl?.setZoomRatio(digitalZoom)
+                txtZoomLabel.text = "DIGITAL CAMERA ZOOM: ${digitalZoom.toInt()}"
             }
-            cameraControl?.setZoomRatio(currentZoom)
-            btnZoom.text = "ZOOM: ${currentZoom.toInt()}X"
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
+
+        seekBarMotion.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                motionSensitivity = progress.toFloat()
+                txtMotionLabel.text = "MOTION SENSITIVITY: ${motionSensitivity.toInt()}"
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+        })
+
+        btnCloseDossier.setOnClickListener {
+            dossierOverlay.visibility = View.GONE
+            isScanning = true
         }
 
-        btnSwitchModel.setOnClickListener {
-            currentModel = if (currentModel == "yolov8n.onnx") "yolo26n.onnx" else "yolov8n.onnx"
-            loadONNXModel(currentModel)
-            btnSwitchModel.text = "MODEL: ${if (currentModel.contains("v8")) "V8" else "V26"}"
-        }
-
-        btnSettings.setOnClickListener {
-            isScanning = false
-            settingsOverlay.visibility = View.VISIBLE
+        btnNewScan.setOnClickListener {
+            dossierOverlay.visibility = View.GONE
+            isScanning = true
         }
 
         btnCloseSettings.setOnClickListener {
@@ -167,25 +229,39 @@ class MainActivity : ComponentActivity() {
             override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
         })
 
-        // Dossier Control Listeners
         hudOverlay.setOnClickListener {
             showDossier()
         }
+    }
 
-        btnCloseDossier.setOnClickListener {
-            dossierOverlay.visibility = View.GONE
-            isScanning = true
-        }
-
-        btnNewScan.setOnClickListener {
-            dossierOverlay.visibility = View.GONE
-            isScanning = true
+    private fun updateMagTrackUI() {
+        hudOverlay.magTrackTargets = trackedTargets
+        
+        val views = listOf(magTrack01, magTrack02, magTrack03, magTrack04)
+        trackedTargets.forEachIndexed { index, target ->
+            if (index < views.size) {
+                val view = views[index]
+                view.findViewById<TextView>(R.id.txtDetectionLabel).text = target.trackLabel
+                view.findViewById<TextView>(R.id.txtDetectionIndex).text = target.coordinateLabel
+                view.findViewById<TextView>(R.id.txtDetectionConfidence).text = "TRACKING ACTIVE"
+            }
         }
     }
 
     private fun showDossier() {
         isScanning = false
         dossierOverlay.visibility = View.VISIBLE
+    }
+
+    private fun updateTabStyles() {
+        val neonGreen = Color.parseColor("#00FF66")
+        val neonCyan = Color.parseColor("#00E5FF")
+        val tacticalAmber = Color.parseColor("#FFA500")
+        val gray = Color.parseColor("#808080")
+
+        tabGeolog.setTextColor(if (activePanel == "GEOLOG" && panelContent.visibility == View.VISIBLE) neonGreen else gray)
+        tabGps.setTextColor(if (activePanel == "GPS" && panelContent.visibility == View.VISIBLE) neonCyan else gray)
+        tabClose.setTextColor(if (panelContent.visibility == View.GONE) tacticalAmber else gray)
     }
 
     private fun setupHighPerformanceMode() {
@@ -289,6 +365,7 @@ class MainActivity : ComponentActivity() {
                     val inferenceTime = System.currentTimeMillis() - startTime
                     inferenceText.text = "INF: ${inferenceTime}ms"
                     updateFps()
+                    hudOverlay.postInvalidate()
                 }
             }
         } catch (e: Exception) {
@@ -346,17 +423,14 @@ class MainActivity : ComponentActivity() {
 
     private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<YoloTarget> {
         val targets = mutableListOf<YoloTarget>()
-        // Simulated targets with normalized coordinates and biometric tags
         val randomId = (1000..9999).random()
         
-        // Mocking live telemetry feed logic
         if (System.currentTimeMillis() % 2 == 0L) {
             targets.add(YoloTarget("TGT-01", "SUBJECT RECON // SIGMA-$randomId", 0.92f, 0.2f, 0.25f, 0.5f, 0.65f))
         } else {
-            targets.add(YoloTarget("TGT-02", "INTEL TRACE // DELTA-$randomId", 0.78f, 0.6f, 0.15f, 0.85f, 0.45f))
+            targets.add(YoloTarget("TGT-02", "INTEL TRACE // DELTA-$randomId", 0.6f, 0.15f, 0.85f, 0.45f, 0.85f))
         }
 
-        // Filter by sensitivityThreshold
         return targets.filter { it.confidence >= sensitivityThreshold }
     }
 

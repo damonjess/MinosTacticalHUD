@@ -63,6 +63,23 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private var scanDirection = 1
     private val scanStep = 0.005f
 
+    private val radarPaint = Paint().apply {
+        color = Color.parseColor("#00FF66")
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val tetherPaint = Paint().apply {
+        color = Color.parseColor("#FFA500")
+        strokeWidth = 1.5f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private var radarAngle = 0f
+    private val radarStep = 2f
+
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
     var currentReticleStyle: ReticleStyle = ReticleStyle.CROSSHAIR
@@ -87,11 +104,18 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val height = height.toFloat()
         val cx = width / 2f
         val cy = height / 2f
+        val tacticalAmber = Color.parseColor("#FFA500")
 
-        // Dynamic Scanning Line
+        // 1. Central Targeting Reticle (Tactical Amber)
+        drawCentralReticle(canvas, width, height, tacticalAmber)
+
+        // 2. Sonar Radar Element (Positioned Right Middle)
+        drawSonarRadar(canvas, width, height)
+
+        // 3. Dynamic Scanning Line
         drawScanningLine(canvas, width, height)
 
-        // Target Acquisition Corner Box Brackets
+        // 4. Target Acquisition Corner Box Brackets
         drawCornerBrackets(canvas, width, height)
 
         when (currentReticleStyle) {
@@ -125,6 +149,78 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     )
                 }
             }
+        }
+
+        // 5. Draw Mag-Track Targets and Tethers
+        drawMagTrackTethers(canvas, width, height)
+    }
+
+    private fun drawCentralReticle(canvas: Canvas, w: Float, h: Float, color: Int) {
+        val paint = Paint().apply {
+            this.color = color
+            this.strokeWidth = 2f
+            this.style = Paint.Style.STROKE
+            this.isAntiAlias = true
+        }
+        val cx = w / 2f
+        val cy = h / 2f
+
+        paint.alpha = 76 // 0.3f
+        canvas.drawCircle(cx, cy, w * 0.3f, paint)
+        
+        paint.alpha = 255
+        canvas.drawCircle(cx, cy, 16f, paint)
+        canvas.drawLine(cx - 30, cy, cx + 30, cy, paint)
+        canvas.drawLine(cx, cy - 30, cx, cy + 30, paint)
+    }
+
+    private fun drawSonarRadar(canvas: Canvas, w: Float, h: Float) {
+        val radarCenter = PointF(w * 0.9f, h * 0.5f)
+        
+        radarPaint.alpha = 127 // 0.5f
+        canvas.drawCircle(radarCenter.x, radarCenter.y, 50f, radarPaint)
+        
+        radarPaint.alpha = 51 // 0.2f
+        canvas.drawCircle(radarCenter.x, radarCenter.y, 25f, radarPaint)
+
+        // Sweep line
+        val rad = Math.toRadians(radarAngle.toDouble())
+        val sweepEnd = PointF(
+            (radarCenter.x + 50 * Math.cos(rad)).toFloat(),
+            (radarCenter.y + 50 * Math.sin(rad)).toFloat()
+        )
+        radarPaint.alpha = 255
+        canvas.drawLine(radarCenter.x, radarCenter.y, sweepEnd.x, sweepEnd.y, radarPaint)
+
+        radarAngle = (radarAngle + radarStep) % 360
+    }
+
+    private fun drawMagTrackTethers(canvas: Canvas, w: Float, h: Float) {
+        val greenMatrix = Color.parseColor("#00FF66")
+        val paint = Paint().apply {
+            this.color = greenMatrix
+            this.strokeWidth = 2f
+            this.style = Paint.Style.STROKE
+            this.isAntiAlias = true
+        }
+
+        magTrackTargets.forEach { target ->
+            val targetPixelX = target.relX * w
+            val targetPixelY = target.relY * h
+
+            // Target box crosshairs
+            canvas.drawCircle(targetPixelX, targetPixelY, 8f, paint)
+            
+            // Draw tether connections to sub windows
+            val windowAnchor = when(target.id) {
+                "TRACK-01" -> PointF(w * 0.15f, h * 0.15f)
+                "TRACK-02" -> PointF(w * 0.85f, h * 0.15f)
+                "TRACK-03" -> PointF(w * 0.15f, h * 0.85f)
+                else -> PointF(w * 0.85f, h * 0.85f)
+            }
+            
+            tetherPaint.alpha = 102 // 0.4f
+            canvas.drawLine(windowAnchor.x, windowAnchor.y, targetPixelX, targetPixelY, tetherPaint)
         }
     }
 

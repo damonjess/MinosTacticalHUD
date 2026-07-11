@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#030708">
 
     <androidx.camera.view.PreviewView
         android:id="@+id/previewView"
@@ -23,15 +24,12 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Top Status Bar -->
+    <!-- Top System Telemetry -->
     <LinearLayout
-        android:id="@+id/telemetryContainer"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
-        android:background="#A60D1527"
         android:orientation="vertical"
-        android:padding="8dp"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
@@ -39,16 +37,17 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:text="SYS.LOG // PANOPTICORE_V4.2"
-            android:textColor="#00E5FF"
-            android:textSize="10sp" />
+            android:text="PANOPTICORE // SENSOR MATRIX"
+            android:textColor="#00FF66"
+            android:textSize="11sp"
+            android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:text="STATUS // TARGET ACQUISITION ACTIVE"
-            android:textColor="#00FF66"
+            android:text="SYS.STATUS // ACTIVE INTERCEPT"
+            android:textColor="#00E5FF"
             android:textSize="10sp" />
 
         <TextView
@@ -58,8 +57,8 @@
             android:layout_marginTop="4dp"
             android:text="FPS: 0"
             android:textColor="#00FF66"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textSize="10sp"
+            android:fontFamily="monospace" />
 
         <TextView
             android:id="@+id/inferenceText"
@@ -67,86 +66,256 @@
             android:layout_height="wrap_content"
             android:text="INF: 0ms"
             android:textColor="#00FF66"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:textSize="10sp"
+            android:fontFamily="monospace" />
     </LinearLayout>
 
-    <!-- Bottom Control Panel -->
-    <HorizontalScrollView
+    <!-- Floating Mag-Track Sub-Windows -->
+    <include
+        android:id="@+id/magTrack01"
+        layout="@layout/item_detection_dossier"
+        android:layout_width="160dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="120dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <include
+        android:id="@+id/magTrack02"
+        layout="@layout/item_detection_dossier"
+        android:layout_width="160dp"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
+        android:layout_marginTop="80dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <include
+        android:id="@+id/magTrack03"
+        layout="@layout/item_detection_dossier"
+        android:layout_width="160dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="350dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <include
+        android:id="@+id/magTrack04"
+        layout="@layout/item_detection_dossier"
+        android:layout_width="160dp"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="350dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Base Terminal Management Panel -->
+    <LinearLayout
+        android:id="@+id/terminalPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="16dp"
-        android:scrollbars="none"
+        android:background="#ED050C14"
+        android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent">
 
+        <!-- Tab Selector -->
         <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp">
+            android:layout_width="match_parent"
+            android:layout_height="55dp"
+            android:background="#02080F"
+            android:orientation="horizontal">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnToggleDetection"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="SCAN: ON"
+            <TextView
+                android:id="@+id/tabGeolog"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="GEOLOG PANEL"
                 android:textColor="#00FF66"
-                app:strokeColor="#00FF66" />
+                android:fontFamily="monospace"
+                android:textSize="12sp"
+                android:background="?attr/selectableItemBackground" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnCycleReticle"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="RETICLE"
-                android:textColor="#00FF66"
-                app:strokeColor="#00FF66" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnToggleTorch"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="TORCH"
-                android:textColor="#00FF66"
-                app:strokeColor="#00FF66" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnZoom"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="ZOOM: 1X"
-                android:textColor="#00FF66"
-                app:strokeColor="#00FF66" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnSettings"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="SETTINGS"
+            <TextView
+                android:id="@+id/tabGps"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="GPS TACTICAL MAP"
                 android:textColor="#00E5FF"
-                app:strokeColor="#00E5FF" />
+                android:fontFamily="monospace"
+                android:textSize="12sp"
+                android:background="?attr/selectableItemBackground" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnSwitchModel"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="MODEL: NANO"
-                android:textColor="#00FF66"
-                app:strokeColor="#00FF66" />
-
+            <TextView
+                android:id="@+id/tabClose"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="TOOLS CLOSE"
+                android:textColor="#FFA500"
+                android:fontFamily="monospace"
+                android:textSize="12sp"
+                android:background="?attr/selectableItemBackground" />
         </LinearLayout>
-    </HorizontalScrollView>
+
+        <!-- Dynamic Content Area -->
+        <ScrollView
+            android:id="@+id/panelContent"
+            android:layout_width="match_parent"
+            android:layout_height="250dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="TRACKING + SENSOR OVERLAYS"
+                    android:textColor="#FFA500"
+                    android:fontFamily="monospace"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnMotionArray"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="8dp"
+                            android:text="MOTION ARRAY\nON"
+                            android:textColor="#00FF66"
+                            app:strokeColor="#00FF66" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnAutoLock"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginEnd="8dp"
+                            android:text="AUTO TARGET\nLOCK"
+                            android:textColor="#00FF66"
+                            app:strokeColor="#00FF66" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnRadarSweep"
+                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="RADAR SWEEP\nON"
+                            android:textColor="#00FF66"
+                            app:strokeColor="#00FF66" />
+                    </LinearLayout>
+                </HorizontalScrollView>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="VISUAL RENDER + TARGET VIEW"
+                    android:textColor="#FFA500"
+                    android:fontFamily="monospace"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="4dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnRenderClassic"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="6dp"
+                        android:text="RENDER\nCLASSIC"
+                        android:textColor="#00E5FF"
+                        app:strokeColor="#00E5FF" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnTargetBig"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="6dp"
+                        android:text="TARGET\nBIG"
+                        android:textColor="#00E5FF"
+                        app:strokeColor="#00E5FF" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnTargetNormal"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="TARGET\nNORMAL"
+                        android:textColor="#00E5FF"
+                        app:strokeColor="#00E5FF" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txtZoomLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="DIGITAL CAMERA ZOOM: 8"
+                    android:textColor="#00FF66"
+                    android:fontFamily="monospace"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/seekBarZoom"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="16"
+                    android:progress="8"
+                    android:progressTint="#00FF66"
+                    android:thumbTint="#FFFFFF" />
+
+                <TextView
+                    android:id="@+id/txtMotionLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="MOTION SENSITIVITY: 36"
+                    android:textColor="#00FF66"
+                    android:fontFamily="monospace"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/seekBarMotion"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:max="100"
+                    android:progress="36"
+                    android:progressTint="#00FF66"
+                    android:thumbTint="#FFFFFF" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
 
     <!-- Inclusion of Dossier Overlay -->
     <include layout="@layout/layout_dossier_overlay" />
