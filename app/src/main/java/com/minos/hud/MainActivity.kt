@@ -291,11 +291,12 @@ class MainActivity : ComponentActivity() {
 
     private fun postProcess(outputs: OrtSession.Result, origWidth: Int, origHeight: Int): List<Detection> {
         val detections = mutableListOf<Detection>()
-        // Simulated detections for visual feedback
+        // Simulated detections with realistic biometric naming tags
+        val randomId = (1000..9999).random()
         if (System.currentTimeMillis() % 2 == 0L) {
-            detections.add(Detection(200f, 400f, 300f, 300f, "Hostile", 0.92f))
+            detections.add(Detection(200f, 400f, 300f, 300f, "SUBJECT RECON // SIGMA-$randomId", 0.92f))
         } else {
-            detections.add(Detection(500f, 800f, 200f, 250f, "Humanoid", 0.78f))
+            detections.add(Detection(500f, 800f, 200f, 250f, "INTEL TRACE // DELTA-$randomId", 0.78f))
         }
         return detections
     }
