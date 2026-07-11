@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/dossierOverlay"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F205080E"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:visibility="gone">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="24dp"
+        android:fontFamily="monospace"
+        android:gravity="center"
+        android:text="PANOPTICORE // TARGET DOSSIER"
+        android:textColor="#00E5FF"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <FrameLayout
+        android:layout_width="180dp"
+        android:layout_height="180dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/bg_cyber_card"
+        android:padding="2dp">
+        <ImageView
+            android:id="@+id/imgLastTarget"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:src="@drawable/ic_launcher_foreground"
+            android:contentDescription="Last detected target" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/btnNewScan"
+        android:layout_width="match_parent"
+        android:layout_height="50dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/bg_cyber_button"
+        android:gravity="center"
+        android:fontFamily="monospace"
+        android:text="INITIALIZE NEW SCAN SEQUENCE"
+        android:textColor="#00FF66"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#800D1527"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/txtTerminalStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="--> AWAITING INTERCEPT BIOMETRIC DATA...\n--> CHOOSE CAPTURE PATTERN TO INITIATE LENS SEARCH."
+            android:textColor="#00E5FF"
+            android:textSize="14sp" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvMatches"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/btnCloseDossier"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="16dp"
+        android:fontFamily="monospace"
+        android:text="RESET SCAN MATRIX"
+        android:textColor="#FF3366"
+        android:textSize="14sp" />
+
+</LinearLayout>

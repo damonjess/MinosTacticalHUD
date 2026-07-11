@@ -138,4 +138,7 @@
         </LinearLayout>
     </HorizontalScrollView>
 
+    <!-- Inclusion of Dossier Overlay -->
+    <include layout="@layout/layout_dossier_overlay" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>

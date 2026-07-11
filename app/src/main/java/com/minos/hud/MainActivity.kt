@@ -39,6 +39,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnToggleTorch: MaterialButton
     private lateinit var btnZoom: MaterialButton
     private lateinit var btnSwitchModel: MaterialButton
+    private lateinit var dossierOverlay: View
+    private lateinit var btnCloseDossier: View
+    private lateinit var btnNewScan: View
 
     // State
     private var isScanning = true
@@ -61,6 +64,9 @@ class MainActivity : ComponentActivity() {
         btnToggleTorch = findViewById(R.id.btnToggleTorch)
         btnZoom = findViewById(R.id.btnZoom)
         btnSwitchModel = findViewById(R.id.btnSwitchModel)
+        dossierOverlay = findViewById(R.id.dossierOverlay)
+        btnCloseDossier = findViewById(R.id.btnCloseDossier)
+        btnNewScan = findViewById(R.id.btnNewScan)
 
         setupHighPerformanceMode()
         setupListeners()
@@ -105,6 +111,26 @@ class MainActivity : ComponentActivity() {
             loadONNXModel(currentModel)
             btnSwitchModel.text = "MODEL: ${if (currentModel.contains("v8")) "V8" else "V26"}"
         }
+
+        // Dossier Control Listeners
+        hudOverlay.setOnClickListener {
+            showDossier()
+        }
+
+        btnCloseDossier.setOnClickListener {
+            dossierOverlay.visibility = View.GONE
+            isScanning = true
+        }
+
+        btnNewScan.setOnClickListener {
+            dossierOverlay.visibility = View.GONE
+            isScanning = true
+        }
+    }
+
+    private fun showDossier() {
+        isScanning = false
+        dossierOverlay.visibility = View.VISIBLE
     }
 
     private fun setupHighPerformanceMode() {
