@@ -29,6 +29,19 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         isAntiAlias = true
     }
 
+    private val scanPaint = Paint().apply {
+        color = Color.parseColor("#00FF66").let { c ->
+            Color.argb(102, Color.red(c), Color.green(c), Color.blue(c))
+        }
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private var scanProgress = 0.1f
+    private var scanDirection = 1
+    private val scanStep = 0.005f
+
     var detections: List<Detection> = emptyList()
     var currentReticleStyle: ReticleStyle = ReticleStyle.CROSSHAIR
 
@@ -46,8 +59,16 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
+        val width = width.toFloat()
+        val height = height.toFloat()
         val cx = width / 2f
         val cy = height / 2f
+
+        // Dynamic Scanning Line
+        drawScanningLine(canvas, width, height)
+
+        // Target Acquisition Corner Box Brackets
+        drawCornerBrackets(canvas, width, height)
 
         when (currentReticleStyle) {
             ReticleStyle.CROSSHAIR -> drawCrosshair(canvas, cx, cy)
@@ -68,6 +89,47 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 textPaint
             )
         }
+    }
+
+    private fun drawScanningLine(canvas: Canvas, width: Float, height: Float) {
+        val y = height * scanProgress
+        canvas.drawLine(0f, y, width, y, scanPaint)
+
+        scanProgress += scanStep * scanDirection
+        if (scanProgress >= 0.9f || scanProgress <= 0.1f) {
+            scanDirection *= -1
+        }
+        postInvalidateDelayed(16) // Aim for ~60fps animation
+    }
+
+    private fun drawCornerBrackets(canvas: Canvas, width: Float, height: Float) {
+        val boxW = width * 0.7f
+        val boxH = height * 0.45f
+        val left = (width - boxW) / 2
+        val top = (height - boxH) / 2
+        val right = left + boxW
+        val bottom = top + boxH
+        val len = 40f
+
+        val path = Path()
+        // Top Left
+        path.moveTo(left, top + len)
+        path.lineTo(left, top)
+        path.lineTo(left + len, top)
+        // Top Right
+        path.moveTo(right - len, top)
+        path.lineTo(right, top)
+        path.lineTo(right, top + len)
+        // Bottom Left
+        path.moveTo(left, bottom - len)
+        path.lineTo(left, bottom)
+        path.lineTo(left + len, bottom)
+        // Bottom Right
+        path.moveTo(right - len, bottom)
+        path.lineTo(right, bottom)
+        path.lineTo(right, bottom + len)
+
+        canvas.drawPath(path, centerPaint)
     }
 
     private fun drawCrosshair(canvas: Canvas, cx: Float, cy: Float) {
