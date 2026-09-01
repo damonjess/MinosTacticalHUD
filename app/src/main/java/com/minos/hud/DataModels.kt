@@ -2,6 +2,7 @@ package com.minos.hud
 
 import android.content.Context
 import android.graphics.Bitmap
+import java.io.File
 
 data class EnrolledFace(
     val id: String,
@@ -20,3 +21,16 @@ object EnrolledFaceStore {
         )
     }
 }
+
+enum class EventCategory {
+    PEOPLE_VEHICLES, ANIMALS, PLATES
+}
+
+data class DetectedEvent(
+    val id: String,
+    val label: String,
+    val timestamp: String,
+    val category: EventCategory,
+    val thumbnailPath: String,
+    val fullImagePath: String? = null
+)
