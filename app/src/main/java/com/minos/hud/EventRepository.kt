@@ -2,7 +2,8 @@ package com.minos.hud
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import java.io.File
 import java.io.FileOutputStream
@@ -12,6 +13,7 @@ import java.util.*
 object EventRepository {
     private val _events = mutableStateListOf<DetectedEvent>()
     val events: List<DetectedEvent> get() = _events
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun loadEvents(context: Context) {
         val eventDir = File(context.filesDir, "events")
@@ -36,8 +38,10 @@ object EventRepository {
                 }
             }?.sortedByDescending { it.timestamp } ?: emptyList()
 
-        _events.clear()
-        _events.addAll(savedEvents)
+        mainHandler.post {
+            _events.clear()
+            _events.addAll(savedEvents)
+        }
     }
 
     fun saveEvent(
@@ -55,11 +59,15 @@ object EventRepository {
         val thumbFile = File(eventDir, "thumb_$id.jpg")
         val fullFile = File(eventDir, "full_$id.jpg")
 
-        // Save thumbnail (downscaled)
-        val thumbBitmap = Bitmap.createScaledBitmap(bitmap, 200, 200 * bitmap.height / bitmap.width, true)
+        // Safe aspect thumbnail downscaling
+        val targetWidth = 200
+        val targetHeight = maxOf(1, targetWidth * bitmap.height / maxOf(1, bitmap.width))
+        val thumbBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        
         FileOutputStream(thumbFile).use { out ->
             thumbBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
         }
+        if (thumbBitmap != bitmap) thumbBitmap.recycle()
 
         // Save full image
         FileOutputStream(fullFile).use { out ->
@@ -78,19 +86,25 @@ object EventRepository {
             fullImagePath = fullFile.absolutePath
         )
         
-        _events.add(0, newEvent)
+        mainHandler.post {
+            _events.add(0, newEvent)
+        }
     }
 
     fun deleteEvent(context: Context, event: DetectedEvent) {
         File(event.thumbnailPath).delete()
         event.fullImagePath?.let { File(it).delete() }
         File(context.filesDir, "events/${event.id}.metadata").delete()
-        _events.remove(event)
+        mainHandler.post {
+            _events.remove(event)
+        }
     }
 
     fun deleteAll(context: Context) {
         val eventDir = File(context.filesDir, "events")
         eventDir.deleteRecursively()
-        _events.clear()
+        mainHandler.post {
+            _events.clear()
+        }
     }
 }

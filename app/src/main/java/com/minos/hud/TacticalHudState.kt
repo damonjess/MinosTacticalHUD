@@ -10,8 +10,8 @@ import android.graphics.Bitmap
 data class MagTrackTarget(
     val id: String,
     val trackLabel: String,
+    val rawLabel: String = "",
     val coordinateLabel: String,
-    // Relative coordinates (0f to 1f)
     val relX: Float,
     val relY: Float,
     val crop: Bitmap? = null
@@ -20,8 +20,8 @@ data class MagTrackTarget(
 data class YoloTarget(
     val id: String,
     val label: String,
+    val rawLabel: String = "",
     val confidence: Float,
-    // Normalized coordinates (0.0f to 1.0f) relative to screen space
     val xMin: Float,
     val yMin: Float,
     val xMax: Float,
@@ -41,10 +41,7 @@ class TacticalHudViewModel : ViewModel() {
     var digitalZoom by mutableStateOf(8f)
     var motionSensitivity by mutableStateOf(36f)
     var activePanel by mutableStateOf("GEOLOG")
-    
-    // Performance Specs 
-    var currentFps by mutableStateOf(6)
-    var inferenceTimeMs by mutableStateOf(176)
-
+    var currentFps by mutableStateOf(0)
+    var inferenceTimeMs by mutableStateOf(0)
     var detectedObjects by mutableStateOf(listOf<DynamicYoloBox>())
 }

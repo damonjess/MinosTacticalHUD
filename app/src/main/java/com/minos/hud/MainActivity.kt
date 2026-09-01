@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.os.Bundle
 import android.preference.PreferenceManager
+import android.util.Size
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,9 +24,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -35,8 +34,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import ai.onnxruntime.*
+import android.view.View
+import androidx.compose.ui.layout.ContentScale
 import org.osmdroid.config.Configuration
-import java.nio.ByteBuffer
+
 import java.nio.FloatBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -53,46 +54,44 @@ class MainActivity : ComponentActivity() {
     private var cameraControl: CameraControl? = null
     private var cameraInfo: CameraInfo? = null
 
-    // Pre-allocated reusable buffers to eliminate Garbage Collection churn
-    private val modelInputSize = 640
+    private val modelInputSize = 320
     private val tensorBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
     private val pixelArray = IntArray(modelInputSize * modelInputSize)
     private val letterboxBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
     private val letterboxCanvas = Canvas(letterboxBitmap)
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private var cleanFrameBuffer: ByteBuffer? = null
 
-    // State managed by Compose
+
     private var isScanning by mutableStateOf(true)
     private var fpsValue by mutableStateOf(0)
     private var inferenceValue by mutableStateOf(0L)
     private var activePanel by mutableStateOf("GEOLOG")
-    private var panelVisible by mutableStateOf(true)
+    private var panelVisible by mutableStateOf(false)
     private var motionArrayOn by mutableStateOf(true)
     private var autoTargetLock by mutableStateOf(true)
     private var digitalZoom by mutableStateOf(1.0f)
-    private var sensitivityThreshold by mutableStateOf(0.35f)
+    private var sensitivityThreshold by mutableStateOf(0.25f)
     private var showDossier by mutableStateOf(false)
-    private var isYoloBoxesEnabled by mutableStateOf(false)
+    private var isYoloBoxesEnabled by mutableStateOf(true)
     private var maxDetections by mutableStateOf(15)
     private var autoMag by mutableStateOf(false)
     private var selectedTarget by mutableStateOf<MagTrackTarget?>(null)
     private var currentScreen by mutableStateOf(Screen.HUD)
 
-    private var isCaptureOn by mutableStateOf(false)
+    private var isCaptureOn by mutableStateOf(true)
     private var currentProfile by mutableStateOf("OUTDOOR")
     private var exposureValue by mutableFloatStateOf(0f)
     private var isTorchEnabled by mutableStateOf(false)
 
-    private lateinit var licensePlateDetector: LicensePlateDetector
+    private var licensePlateDetector: LicensePlateDetector? = null
     private lateinit var captureManager: CaptureManager
+    private val plateCooldownMap = mutableMapOf<String, Long>()
 
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
     private var hudOverlay: HUDOverlayView? = null
     private var previewView by mutableStateOf<PreviewView?>(null)
 
-    // Simple Tracker State
     private var nextTrackId = 1
     private val activeTracks = mutableListOf<MagTrackTarget>()
 
@@ -127,7 +126,11 @@ class MainActivity : ComponentActivity() {
         ortEnv = OrtEnvironment.getEnvironment()
         loadONNXModel("yolov8n.onnx")
 
-        licensePlateDetector = LicensePlateDetector(this)
+        try {
+            licensePlateDetector = LicensePlateDetector(this)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         captureManager = CaptureManager(this)
 
         EventRepository.loadEvents(this)
@@ -207,10 +210,7 @@ class MainActivity : ComponentActivity() {
                     it.isYoloBoxesEnabled = isYoloBoxesEnabled
                     it.sensitivityThreshold = sensitivityThreshold
                 },
-                modifier = Modifier.fillMaxSize().clickable {
-                    showDossier = true
-                    isScanning = false
-                }
+                modifier = Modifier.fillMaxSize()
             )
 
             CaptureHUD(
@@ -226,7 +226,7 @@ class MainActivity : ComponentActivity() {
             if (panelVisible) {
                 Box(modifier = Modifier.fillMaxSize().background(Color(0xCC000000)).clickable { panelVisible = false }) {
                     Card(
-                        modifier = Modifier.align(Alignment.Center).fillMaxWidth(0.9f).fillMaxHeight(0.8f),
+                        modifier = Modifier.align(Alignment.Center).fillMaxWidth(0.9f).wrapContentHeight(),
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF05101A)),
                         shape = RoundedCornerShape(16.dp),
                         border = BorderStroke(1.dp, Color(0xFF00FF9D))
@@ -247,7 +247,7 @@ class MainActivity : ComponentActivity() {
         Column(modifier = Modifier.fillMaxSize()) {
             // Top Bar
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 40.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -261,20 +261,20 @@ class MainActivity : ComponentActivity() {
                 Row {
                     Button(
                         onClick = onLogsClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33000000)),
                         shape = RoundedCornerShape(20.dp),
-                        border = BorderStroke(1.dp, Color.Gray)
+                        border = BorderStroke(1.dp, Color(0xFF00FF9D))
                     ) {
-                        Text("LOGS ${EventRepository.events.size}", color = Color.White)
+                        Text("LOGS ${EventRepository.events.size}", color = Color.White, fontFamily = FontFamily.Monospace)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = onSettingsClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33000000)),
                         shape = RoundedCornerShape(20.dp),
                         border = BorderStroke(1.dp, Color.Gray)
                     ) {
-                        Text("SET", color = Color.White)
+                        Text("SET", color = Color.White, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
@@ -284,15 +284,16 @@ class MainActivity : ComponentActivity() {
                 text = "LIVE  •  ${trackedTargets.size} TARGETS  •  ${if(isScanning) "Scanning" else "Paused"}",
                 color = Color(0xFF00A8FF),
                 fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Profile Selection
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text(text = "PROFILE  •  $currentProfile", color = Color.Gray, fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(8.dp))
+                Text(text = "PROFILE  •  $currentProfile", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Spacer(modifier = Modifier.height(6.dp))
                 Row {
                     ProfileButton("INDOOR", currentProfile == "INDOOR") { currentProfile = "INDOOR" }
                     Spacer(modifier = Modifier.width(8.dp))
@@ -308,14 +309,15 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xAA000000))
+                    .background(Color(0xCC050C14))
                     .padding(16.dp)
             ) {
                 Text(
                     text = "LOW LIGHT — ENABLE TORCH",
                     color = Color(0xFFD4AF37),
                     fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -332,9 +334,9 @@ class MainActivity : ComponentActivity() {
                         Text("TORCH", color = if(isTorchEnabled) Color.Black else Color.White)
                     }
                     Spacer(modifier = Modifier.width(16.dp))
-                    Text(text = "${digitalZoom}x", color = Color(0xFF00FF9D), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(text = "${String.format("%.1f", digitalZoom)}x", color = Color(0xFF00FF9D), fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                     Spacer(modifier = Modifier.width(16.dp))
-                    Text(text = "EXP ${exposureValue.toInt()}", color = Color.Gray, fontSize = 12.sp)
+                    Text(text = "EXP ${exposureValue.toInt()}", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                     Slider(
                         value = exposureValue,
                         onValueChange = { 
@@ -347,22 +349,24 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "${trackedTargets.size} TARGETS  •  ${EventRepository.events.size} SAVED  •  CAPTURE ${if(isCaptureOn) "ON" else "OFF"}",
                     color = Color.White,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = { isCaptureOn = !isCaptureOn },
-                        colors = ButtonDefaults.buttonColors(containerColor = if(isCaptureOn) Color(0xFF008544) else Color(0xFF004422)),
+                        colors = ButtonDefaults.buttonColors(containerColor = if(isCaptureOn) Color(0xFF008544) else Color(0xFF333333)),
                         modifier = Modifier.weight(1f).height(50.dp),
-                        shape = RoundedCornerShape(25.dp)
+                        shape = RoundedCornerShape(25.dp),
+                        border = BorderStroke(1.dp, if(isCaptureOn) Color(0xFF00FF9D) else Color.Gray)
                     ) {
-                        Text("CAPTURE", color = Color.White, fontSize = 18.sp)
+                        Text(if(isCaptureOn) "CAPTURE ON" else "CAPTURE OFF", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
@@ -372,7 +376,7 @@ class MainActivity : ComponentActivity() {
                         shape = RoundedCornerShape(25.dp),
                         border = BorderStroke(1.dp, Color.Gray)
                     ) {
-                        Text(if(isScanning) "PAUSE" else "RESUME", color = Color.White, fontSize = 18.sp)
+                        Text(if(isScanning) "PAUSE" else "RESUME", color = Color.White, fontSize = 15.sp)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
@@ -382,7 +386,7 @@ class MainActivity : ComponentActivity() {
                         shape = RoundedCornerShape(25.dp),
                         border = BorderStroke(1.dp, Color.Gray)
                     ) {
-                        Text("LOGS", color = Color.White, fontSize = 18.sp)
+                        Text("LOGS (${EventRepository.events.size})", color = Color.White, fontSize = 15.sp)
                     }
                 }
             }
@@ -393,7 +397,7 @@ class MainActivity : ComponentActivity() {
     fun ProfileButton(text: String, active: Boolean, onClick: () -> Unit) {
         Button(
             onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = if(active) Color.Transparent else Color.Transparent),
+            colors = ButtonDefaults.buttonColors(containerColor = if(active) Color(0x3300FF9D) else Color.Transparent),
             shape = RoundedCornerShape(20.dp),
             border = BorderStroke(1.dp, if(active) Color(0xFF00FF9D) else Color.Gray),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
@@ -407,8 +411,7 @@ class MainActivity : ComponentActivity() {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(250.dp)
-                .padding(14.dp)
+                .padding(20.dp)
         ) {
             Text(
                 "SYSTEM SENSITIVITY // SCANNER CALIBRATION",
@@ -443,10 +446,10 @@ class MainActivity : ComponentActivity() {
                     inactiveTrackColor = Color(0xFF00FF66).copy(alpha = 0.2f)
                 )
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "RENDER YOLO BOUNDING BOXES",
+                    "RENDER TARGET BOUNDING BOXES",
                     color = Color.White,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
@@ -461,73 +464,14 @@ class MainActivity : ComponentActivity() {
                     )
                 )
             }
-        }
-    }
-
-    @Composable
-    fun GeologContent() {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(250.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(14.dp)
-        ) {
-            Text(
-                "TRACKING + SENSOR OVERLAYS",
-                color = Color(0xFFFFA500),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-                TerminalActionButton(
-                    text = "MOTION ARRAY\n${if (motionArrayOn) "ON" else "OFF"}",
-                    active = motionArrayOn,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp)
-                ) { motionArrayOn = !motionArrayOn }
-                TerminalActionButton(
-                    text = "AUTO TARGET\n${if (autoTargetLock) "LOCK" else "UNLOCK"}",
-                    active = autoTargetLock,
-                    modifier = Modifier.weight(1f).padding(end = 8.dp)
-                ) { autoTargetLock = !autoTargetLock }
-                TerminalActionButton(
-                    text = "RADAR SWEEP\nON",
-                    active = true,
-                    modifier = Modifier.weight(1f)
-                )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = { panelVisible = false },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF008544)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("APPLY & CLOSE", color = Color.White, fontFamily = FontFamily.Monospace)
             }
-
-            Text(
-                "DIGITAL CAMERA ZOOM: ${digitalZoom.toInt()}",
-                color = Color(0xFF00FF66),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(top = 12.dp)
-            )
-            Slider(
-                value = digitalZoom,
-                onValueChange = {
-                    digitalZoom = it
-                    cameraControl?.setZoomRatio(it)
-                },
-                valueRange = 1f..16f,
-                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color(0xFF00FF66))
-            )
-        }
-    }
-
-    @Composable
-    fun GpsTacticalMapContent() {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(250.dp)
-                .background(Color(0xFF02080F))
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("GPS SENSOR INTERFACE // STANDBY", color = Color(0xFF00E5FF), fontFamily = FontFamily.Monospace)
         }
     }
 
@@ -556,12 +500,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
                 Box(modifier = Modifier.fillMaxWidth().height(300.dp).border(1.dp, Color(0xFFFFA500).copy(alpha = 0.5f))) {
-                    Image(
-                        bitmap = target.crop?.asImageBitmap() ?: ImageBitmap(1, 1),
-                        contentDescription = null,
-                        contentScale = androidx.compose.ui.layout.ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    target.crop?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = null,
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 TerminalActionButton(
@@ -598,22 +544,31 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
-            android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-            or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+            or View.SYSTEM_UI_FLAG_FULLSCREEN
+            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
-        window.attributes.screenBrightness = 1.0f
     }
 
     private fun loadONNXModel(modelName: String) {
         try {
             ortSession?.close()
             val env = ortEnv ?: return
-            assets.open(modelName).use { input ->
-                ortSession = env.createSession(input.readBytes())
+            
+            val options = OrtSession.SessionOptions().apply {
+                // NNAPI disabled: Highly unstable on YOLOv8 exports across different Android devices (causes 0 targets).
+                // Instead, we maximize CPU multithreading for the ONNX Runtime to keep speeds high.
+                setIntraOpNumThreads(4)
+                setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
             }
-        } catch (e: Exception) { e.printStackTrace() }
+
+            assets.open(modelName).use { input ->
+                ortSession = env.createSession(input.readBytes(), options)
+            }
+        } catch (e: Exception) { 
+            e.printStackTrace() 
+        }
     }
 
     private fun startHighPerformanceCamera() {
@@ -626,7 +581,9 @@ class MainActivity : ComponentActivity() {
                 it.setSurfaceProvider(view.surfaceProvider)
             }
 
+            // Upgraded to 1080x1920 high resolution stream for sharp crops
             val imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(1080, 1920))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build().also {
@@ -653,38 +610,17 @@ class MainActivity : ComponentActivity() {
         val startTime = System.currentTimeMillis()
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
 
-        // 1. Extract Bitmap safely
+        // 1. Extract Bitmap safely using CameraX native conversion to prevent channel corruption
         val rawBitmap = try {
-            val plane = imageProxy.planes[0]
-            val buffer = plane.buffer
-            val rowStride = plane.rowStride
-            val pixelStride = plane.pixelStride
-            val bmp = Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
-            buffer.rewind()
-            if (rowStride == imageProxy.width * pixelStride) {
-                bmp.copyPixelsFromBuffer(buffer)
-            } else {
-                val rowSize = imageProxy.width * pixelStride
-                if (cleanFrameBuffer == null || cleanFrameBuffer?.capacity() != rowSize * imageProxy.height) {
-                    cleanFrameBuffer = ByteBuffer.allocateDirect(rowSize * imageProxy.height)
-                }
-                val clean = cleanFrameBuffer!!
-                clean.rewind()
-                val rowBytes = ByteArray(rowSize)
-                for (y in 0 until imageProxy.height) {
-                    buffer.position(y * rowStride)
-                    buffer.get(rowBytes)
-                    clean.put(rowBytes)
-                }
-                clean.rewind()
-                bmp.copyPixelsFromBuffer(clean)
-            }
-            bmp
+            imageProxy.toBitmap()
         } catch (e: Exception) {
-            imageProxy.close()
-            return
+            null
         }
-        imageProxy.close()
+
+        // Close immediately after extraction to free memory for the next frame
+        imageProxy.close() 
+
+        if (rawBitmap == null) return
 
         // 2. Rotate Bitmap according to camera sensor rotation
         val rotatedBitmap = if (rotationDegrees != 0) {
@@ -710,10 +646,14 @@ class MainActivity : ComponentActivity() {
             val outputs = session.run(inputs)
 
             if (outputs != null) {
-                val targets = postProcess(outputs, rotatedBitmap, letterboxInfo)
+                val targets = postProcess(outputs, rotatedBitmap, letterboxInfo).toMutableList()
+                
+                // Track update & capture synchronously while crops are fresh
+                val plateTargets = updateMagTrackTargets(targets)
+                targets.addAll(plateTargets)
+
                 runOnUiThread {
                     hudOverlay?.updateTargets(targets)
-                    updateMagTrackTargets(targets)
                     inferenceValue = System.currentTimeMillis() - startTime
                     updateFps()
                 }
@@ -791,16 +731,18 @@ class MainActivity : ComponentActivity() {
                 val w = buffer.get(2 * numElements + i)
                 val h = buffer.get(3 * numElements + i)
 
-                // Unletterbox back to normalized camera frame coordinates [0.0..1.0]
                 val xMin = ((cx - w / 2f) - info.padX) / (srcW * info.scale)
                 val yMin = ((cy - h / 2f) - info.padY) / (srcH * info.scale)
                 val xMax = ((cx + w / 2f) - info.padX) / (srcW * info.scale)
                 val yMax = ((cy + h / 2f) - info.padY) / (srcH * info.scale)
 
+                val rawName = labels.getOrNull(maxClassId) ?: "unknown"
+
                 candidateTargets.add(
                     YoloTarget(
                         id = "TGT-${candidateTargets.size}",
-                        label = labels.getOrNull(maxClassId) ?: "unknown",
+                        label = rawName,
+                        rawLabel = rawName,
                         confidence = maxScore,
                         xMin = xMin.coerceIn(0f, 1f),
                         yMin = yMin.coerceIn(0f, 1f),
@@ -813,17 +755,26 @@ class MainActivity : ComponentActivity() {
 
         val nmsSelected = nms(candidateTargets)
         return nmsSelected.take(maxDetections).map { target ->
-            val left = (target.xMin * sourceBitmap.width).toInt()
-            val top = (target.yMin * sourceBitmap.height).toInt()
-            val w = ((target.xMax - target.xMin) * sourceBitmap.width).toInt().coerceAtLeast(1)
-            val h = ((target.yMax - target.yMin) * sourceBitmap.height).toInt().coerceAtLeast(1)
-            val crop = try { Bitmap.createBitmap(sourceBitmap, left, top, w, h) } catch (e: Exception) { null }
-            target.copy(label = getTacticalLabel(target.label), crop = crop)
+            val left = (target.xMin * sourceBitmap.width).toInt().coerceIn(0, sourceBitmap.width - 1)
+            val top = (target.yMin * sourceBitmap.height).toInt().coerceIn(0, sourceBitmap.height - 1)
+            val w = ((target.xMax - target.xMin) * sourceBitmap.width).toInt().coerceIn(1, sourceBitmap.width - left)
+            val h = ((target.yMax - target.yMin) * sourceBitmap.height).toInt().coerceIn(1, sourceBitmap.height - top)
+            
+            // High-resolution crop copy
+            val crop = try { 
+                val cropped = Bitmap.createBitmap(sourceBitmap, left, top, w, h)
+                cropped.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (e: Exception) { null }
+
+            target.copy(
+                label = getTacticalLabel(target.rawLabel),
+                rawLabel = target.rawLabel,
+                crop = crop
+            )
         }
     }
 
-    // Adaptive tracking algorithm for fast-moving vehicles
-    private fun updateMagTrackTargets(targets: List<YoloTarget>) {
+    private fun updateMagTrackTargets(targets: List<YoloTarget>): List<YoloTarget> {
         if (autoMag && targets.isNotEmpty()) {
             val bestTarget = targets.maxByOrNull { it.confidence }
             if (bestTarget != null && bestTarget.confidence > 0.7f && digitalZoom < 2f) {
@@ -834,9 +785,9 @@ class MainActivity : ComponentActivity() {
 
         val updatedTracks = mutableListOf<MagTrackTarget>()
         val unassignedTargets = targets.toMutableList()
+        val plateTargets = mutableListOf<YoloTarget>()
 
         activeTracks.forEach { track ->
-            // Match based on a combination of Euclidean distance + IoU
             val bestMatch = unassignedTargets.minByOrNull { yolo ->
                 val targetCenterX = (yolo.xMin + yolo.xMax) / 2f
                 val targetCenterY = (yolo.yMin + yolo.yMax) / 2f
@@ -852,73 +803,117 @@ class MainActivity : ComponentActivity() {
                 val dy = track.relY - targetCenterY
                 val distSq = dx * dx + dy * dy
 
-                // Fast vehicle tolerance threshold: 0.16 (covers up to 40% screen traversal per frame)
                 if (distSq < 0.16f) {
                     unassignedTargets.remove(bestMatch)
-                    // Apply exponential moving average (EMA) smoothing for position lock stability
-                    val smoothedX = track.relX * 0.3f + targetCenterX * 0.7f
-                    val smoothedY = track.relY * 0.3f + targetCenterY * 0.7f
+                    val smoothedX = track.relX * 0.2f + targetCenterX * 0.8f
+                    val smoothedY = track.relY * 0.2f + targetCenterY * 0.8f
 
-                    updatedTracks.add(
-                        track.copy(
-                            relX = smoothedX,
-                            relY = smoothedY,
-                            coordinateLabel = "X:${(bestMatch.xMin * 100).toInt()} Y:${(bestMatch.yMin * 100).toInt()} Z:${(bestMatch.confidence * 100).toInt()}%",
-                            crop = bestMatch.crop ?: track.crop
-                        )
+                    val updatedTrack = track.copy(
+                        rawLabel = bestMatch.rawLabel,
+                        relX = smoothedX,
+                        relY = smoothedY,
+                        coordinateLabel = "X:${(bestMatch.xMin * 100).toInt()} Y:${(bestMatch.yMin * 100).toInt()} Z:${(bestMatch.confidence * 100).toInt()}%",
+                        crop = bestMatch.crop ?: track.crop
                     )
+                    updatedTracks.add(updatedTrack)
+
+                    // Plate Detection for tracked vehicles
+                    val raw = bestMatch.rawLabel.lowercase()
+                    if (raw in listOf("car", "bus", "truck", "motorcycle")) {
+                        bestMatch.crop?.let { vehicleCrop ->
+                            licensePlateDetector?.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
+                                val p = plateResult.plateTarget
+                                val vW = bestMatch.xMax - bestMatch.xMin
+                                val vH = bestMatch.yMax - bestMatch.yMin
+                                val globalPlate = p.copy(
+                                    xMin = bestMatch.xMin + p.xMin * vW,
+                                    yMin = bestMatch.yMin + p.yMin * vH,
+                                    xMax = bestMatch.xMin + p.xMax * vW,
+                                    yMax = bestMatch.yMin + p.yMax * vH
+                                )
+                                plateTargets.add(globalPlate)
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Add newly identified targets
+        // Add newly identified targets with persistent TRACK-IDs
         unassignedTargets.take(4 - updatedTracks.size).forEach { yolo ->
             val cx = (yolo.xMin + yolo.xMax) / 2f
             val cy = (yolo.yMin + yolo.yMax) / 2f
-            val label = yolo.label
             
-            updatedTracks.add(
-                MagTrackTarget(
-                    id = "TRACK-${nextTrackId++ % 1000}",
-                    trackLabel = "AUTO MAG-TRACK // $label",
-                    coordinateLabel = "X:${(yolo.xMin * 100).toInt()} Y:${(yolo.yMin * 100).toInt()} Z:${(yolo.confidence * 100).toInt()}%",
-                    relX = cx,
-                    relY = cy,
-                    crop = yolo.crop
-                )
+            val newTrack = MagTrackTarget(
+                id = "TRACK-${nextTrackId++ % 1000}",
+                trackLabel = "AUTO MAG-TRACK // ${yolo.rawLabel.uppercase()}",
+                rawLabel = yolo.rawLabel,
+                coordinateLabel = "X:${(yolo.xMin * 100).toInt()} Y:${(yolo.yMin * 100).toInt()} Z:${(yolo.confidence * 100).toInt()}%",
+                relX = cx,
+                relY = cy,
+                crop = yolo.crop
             )
+            updatedTracks.add(newTrack)
+
+            // Plate Detection for new vehicles
+            if (yolo.rawLabel.lowercase() in listOf("car", "bus", "truck", "motorcycle")) {
+                yolo.crop?.let { vehicleCrop ->
+                    licensePlateDetector?.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
+                        val p = plateResult.plateTarget
+                        val vW = yolo.xMax - yolo.xMin
+                        val vH = yolo.yMax - yolo.yMin
+                        val globalPlate = p.copy(
+                            xMin = yolo.xMin + p.xMin * vW,
+                            yMin = yolo.yMin + p.yMin * vH,
+                            xMax = yolo.xMin + p.xMax * vW,
+                            yMax = yolo.yMin + p.yMax * vH
+                        )
+                        plateTargets.add(globalPlate)
+                    }
+                }
+            }
         }
 
         activeTracks.clear()
         activeTracks.addAll(updatedTracks)
-        trackedTargets.clear()
-        trackedTargets.addAll(updatedTracks)
-        hudOverlay?.magTrackTargets = updatedTracks
 
-        // Unified Capture Logic
+        runOnUiThread {
+            trackedTargets.clear()
+            trackedTargets.addAll(updatedTracks)
+            hudOverlay?.magTrackTargets = updatedTracks
+        }
+
+        // Deduplicated and Stabilized Logging
         if (isCaptureOn) {
+            val now = System.currentTimeMillis()
             updatedTracks.forEach { track ->
-                val rawLabel = track.trackLabel.replace("AUTO MAG-TRACK // ", "")
-                val category = when (rawLabel.lowercase()) {
-                    "person", "car", "bus", "truck", "motorcycle" -> EventCategory.PEOPLE_VEHICLES
-                    "dog", "cat", "bird", "horse", "sheep", "cow" -> EventCategory.ANIMALS
+                val raw = track.rawLabel.lowercase().trim()
+                val category = when (raw) {
+                    "car", "bus", "truck", "motorcycle", "bicycle", "train", "airplane", "boat" -> EventCategory.PEOPLE_VEHICLES
+                    "person" -> EventCategory.PEOPLE_VEHICLES
+                    "dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe" -> EventCategory.ANIMALS
                     else -> null
                 }
 
-                if (category != null && track.coordinateLabel.contains("Z:")) {
-                    // Extract confidence from coordinateLabel "X:... Y:... Z:NN%"
-                    val confidence = track.coordinateLabel.substringAfter("Z:").substringBefore("%").toIntOrNull() ?: 0
-                    
-                    if (confidence > 45) {
-                        track.crop?.let { bitmap ->
-                            val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
-                            captureManager.processDetection(track.id, rawLabel, category, bitmap, score)
-                            
-                            // License Plate Sub-Detection
-                            if (rawLabel.lowercase() in listOf("car", "bus", "truck")) {
-                                val plate = licensePlateDetector.detectPlate(bitmap)
-                                if (plate != null) {
-                                    EventRepository.saveEvent(this, "PLATE FOUND // ${rawLabel.uppercase()}", EventCategory.PLATES, bitmap)
+                if (category != null) {
+                    track.crop?.let { bitmap ->
+                        // 1. Process vehicle/person/animal capture (with 25s stationary cooldown)
+                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, track.relX, track.relY)
+
+                        // 2. License Plate Detector for vehicles - Cooldown only for SAVING
+                        if (raw in listOf("car", "bus", "truck", "motorcycle")) {
+                            val lastPlateTime = plateCooldownMap[track.id]
+                            if (lastPlateTime == null || now - lastPlateTime > 30000L) {
+                                // Find the plate from the current frame's plateTargets if possible, 
+                                // or just run it again for saving (it was already run above for the HUD)
+                                licensePlateDetector?.detectAndCropPlate(bitmap)?.let { result ->
+                                    plateCooldownMap[track.id] = now
+                                    EventRepository.saveEvent(
+                                        this,
+                                        "PLATE // ${raw.uppercase()}",
+                                        EventCategory.PLATES,
+                                        result.plateCrop
+                                    )
                                 }
                             }
                         }
@@ -926,6 +921,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        return plateTargets
     }
 
     private fun updateFps() {
@@ -939,13 +935,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getTacticalLabel(baseLabel: String): String {
-        val randomId = (1000..9999).random()
         val label = baseLabel.uppercase()
         return when {
-            label == "PERSON" -> "BIO-SIGN // SUBJECT-${randomId}"
+            label == "PERSON" -> "BIO-SIGN // PERSON"
             label in listOf("BICYCLE", "CAR", "MOTORCYCLE", "AIRPLANE", "BUS", "TRAIN", "TRUCK", "BOAT") ->
-                "MOBILE VEHICLE // ${label}-${randomId}"
-            else -> "${label} // UNIT-${randomId}"
+                "VEHICLE // $label"
+            label in listOf("DOG", "CAT", "BIRD", "HORSE", "SHEEP", "COW", "ELEPHANT", "BEAR", "ZEBRA", "GIRAFFE") ->
+                "ANIMAL // $label"
+            else -> "OBJECT // $label"
         }
     }
 
@@ -975,7 +972,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        licensePlateDetector.close()
+        licensePlateDetector?.close()
     }
 }
 

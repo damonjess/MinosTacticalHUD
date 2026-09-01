@@ -1,5 +1,7 @@
 package com.minos.hud
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,6 +12,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,10 +23,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.graphics.BitmapFactory
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.io.File
 
 @Composable
@@ -30,6 +36,7 @@ fun EventLogScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
     val events = EventRepository.events
+    var viewingEvent by remember { mutableStateOf<DetectedEvent?>(null) }
 
     val filteredEvents = when (selectedTab) {
         0 -> events.filter { it.category == EventCategory.PEOPLE_VEHICLES }
@@ -38,61 +45,93 @@ fun EventLogScreen(onBack: () -> Unit) {
         else -> events
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF010408))) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                tint = Color(0xFF00FF9D),
-                modifier = Modifier.size(32.dp).clickable { onBack() }
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(
-                text = "EVENT LOG",
-                color = Color(0xFF00FF9D),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = "•",
-                color = Color(0xFF00FF9D),
-                modifier = Modifier.padding(horizontal = 8.dp)
-            )
-            Text(
-                text = "${events.size}",
-                color = Color(0xFF00FF9D),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Button(
-                onClick = { EventRepository.deleteAll(context) },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421515)),
-                shape = RoundedCornerShape(20.dp)
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF010408))) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 40.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("DELETE ALL", color = Color.White)
-            }
-        }
-
-        // Tabs
-        Row(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-            LogTab("PEOPLE + VEHIC...", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
-            LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
-            LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
-        }
-
-        // List
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(8.dp)) {
-            items(filteredEvents) { event ->
-                EventItem(event) {
-                    EventRepository.deleteEvent(context, event)
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color(0xFF00FF9D),
+                    modifier = Modifier.size(32.dp).clickable { onBack() }
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Text(
+                    text = "EVENT LOG",
+                    color = Color(0xFF00FF9D),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "•",
+                    color = Color(0xFF00FF9D),
+                    modifier = Modifier.padding(horizontal = 6.dp)
+                )
+                Text(
+                    text = "${events.size}",
+                    color = Color(0xFF00FF9D),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Button(
+                    onClick = { EventRepository.deleteAll(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421515)),
+                    shape = RoundedCornerShape(20.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text("DELETE ALL", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
+
+            // Tabs
+            Row(modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                LogTab("PEOPLE + VEHIC (${events.count { it.category == EventCategory.PEOPLE_VEHICLES }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
+                LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
+                LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
+            }
+
+            // List
+            if (filteredEvents.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "NO DETECTIONS LOGGED YET",
+                        color = Color.Gray,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp
+                    )
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    items(filteredEvents, key = { it.id }) { event ->
+                        EventItem(
+                            event = event,
+                            onClick = { viewingEvent = event },
+                            onDelete = { EventRepository.deleteEvent(context, event) }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Full Screen Tactical Image Viewer Modal
+        viewingEvent?.let { event ->
+            FullImageDossierDialog(
+                event = event,
+                onDismiss = { viewingEvent = null },
+                onDelete = {
+                    EventRepository.deleteEvent(context, event)
+                    viewingEvent = null
+                }
+            )
         }
     }
 }
@@ -107,17 +146,22 @@ fun LogTab(text: String, active: Boolean, modifier: Modifier, onClick: () -> Uni
         Text(
             text = text,
             color = if (active) Color(0xFF00FF9D) else Color.Gray,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold
         )
-        if (active) {
-            Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color(0xFF00FF9D)))
-        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .background(if (active) Color(0xFF00FF9D) else Color.Transparent)
+        )
     }
 }
 
 @Composable
-fun EventItem(event: DetectedEvent, onDelete: () -> Unit) {
+fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
     val bitmap = remember(event.thumbnailPath) {
         try {
             BitmapFactory.decodeFile(event.thumbnailPath)
@@ -127,22 +171,26 @@ fun EventItem(event: DetectedEvent, onDelete: () -> Unit) {
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = Color(0xFF05101A)),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF102A3E))
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color(0xFF102A3E))
     ) {
-        Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier
-                    .size(100.dp, 80.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .size(110.dp, 80.dp)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(Color.Black)
+                    .border(1.dp, Color(0xFF00FF9D).copy(alpha = 0.3f), RoundedCornerShape(6.dp))
             ) {
                 bitmap?.let {
                     Image(
                         bitmap = it.asImageBitmap(),
-                        contentDescription = null,
+                        contentDescription = "Event Thumbnail",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -152,27 +200,160 @@ fun EventItem(event: DetectedEvent, onDelete: () -> Unit) {
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = event.label, color = Color(0xFF00FF9D), fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(text = event.timestamp, color = Color.Gray, fontSize = 12.sp)
+                Text(
+                    text = event.label,
+                    color = Color(0xFF00FF9D),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = event.timestamp,
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = when(event.category) {
-                        EventCategory.PEOPLE_VEHICLES -> "VEHICLE"
-                        EventCategory.ANIMALS -> "ANIMAL"
-                        EventCategory.PLATES -> "PLATE"
-                    }, color = Color(0xFF00A8FF), fontSize = 11.sp)
+                    Text(
+                        text = when (event.category) {
+                            EventCategory.PEOPLE_VEHICLES -> "VEHICLE/PERSON"
+                            EventCategory.ANIMALS -> "ANIMAL"
+                            EventCategory.PLATES -> "LICENSE PLATE"
+                        },
+                        color = Color(0xFF00A8FF),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                     Text(text = " • ", color = Color.Gray)
-                    Text(text = "TAP THUMBNA...", color = Color(0xFF00A8FF), fontSize = 11.sp)
+                    Text(
+                        text = "VIEW FULL",
+                        color = Color(0xFF00FF9D),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
 
             Button(
                 onClick = onDelete,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421515)),
-                shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                modifier = Modifier.height(36.dp)
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.height(34.dp)
             ) {
-                Text("DELETE", color = Color.White, fontSize = 12.sp)
+                Text("DELETE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete: () -> Unit) {
+    val fullBitmap = remember(event.id) {
+        val path = event.fullImagePath ?: event.thumbnailPath
+        try {
+            BitmapFactory.decodeFile(path) ?: BitmapFactory.decodeFile(event.thumbnailPath)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xF002060B))
+                .clickable { onDismiss() }
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = false) {} // Prevent click-through dismissal
+                    .border(1.dp, Color(0xFF00FF9D), RoundedCornerShape(12.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF05101A)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Title Bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = event.label,
+                                color = Color(0xFF00FF9D),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = event.timestamp,
+                                color = Color.LightGray,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Image Display Frame
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(360.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black)
+                            .border(1.dp, Color(0xFF102A3E), RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (fullBitmap != null) {
+                            Image(
+                                bitmap = fullBitmap.asImageBitmap(),
+                                contentDescription = "High-Res Detection Capture",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Text("UNABLE TO LOAD FULL IMAGE", color = Color.Red, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Action Controls
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Button(
+                            onClick = onDelete,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5A1C1C)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("DELETE EVENT", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = onDismiss,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF008544)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("CLOSE", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+                    }
+                }
             }
         }
     }

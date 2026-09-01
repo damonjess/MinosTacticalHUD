@@ -8,19 +8,46 @@ import kotlin.math.max
 
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
-    private val boxPaint = Paint().apply {
+    private val vehiclePaint = Paint().apply {
         color = Color.parseColor("#00FF66")
-        strokeWidth = 5f
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val animalPaint = Paint().apply {
+        color = Color.parseColor("#FFA500")
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val personPaint = Paint().apply {
+        color = Color.parseColor("#00E5FF")
+        strokeWidth = 4f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
+    private val platePaint = Paint().apply {
+        color = Color.parseColor("#FFFF00") // Yellow for plates
+        strokeWidth = 3f
         style = Paint.Style.STROKE
         isAntiAlias = true
     }
 
     private val textPaint = Paint().apply {
         color = Color.parseColor("#00FF66")
-        textSize = 42f
+        textSize = 34f
         isAntiAlias = true
-        typeface = Typeface.MONOSPACE
-        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        textAlign = Paint.Align.LEFT
+    }
+
+    private val textBgPaint = Paint().apply {
+        color = Color.parseColor("#CC03090F")
+        style = Paint.Style.FILL
+        isAntiAlias = true
     }
 
     private val tetherPaint = Paint().apply {
@@ -32,8 +59,9 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
+    private val smoothedTargets = mutableListOf<YoloTarget>()
     var isYoloBoxesEnabled: Boolean = true
-    var sensitivityThreshold: Float = 0.5f
+    var sensitivityThreshold: Float = 0.25f // Lowered default for better detection visibility
 
     private var camSourceWidth = 720f
     private var camSourceHeight = 1280f
@@ -45,7 +73,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     fun updateTargets(newTargets: List<YoloTarget>) {
         targets = newTargets
-        postInvalidate()
+        postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -55,35 +83,46 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val vHeight = height.toFloat()
         if (vWidth == 0f || vHeight == 0f) return
 
-        // Compute FILL_CENTER transform mapping
+        // Compute FILL_CENTER transform mapping matching camera aspect ratio
         val scale = max(vWidth / camSourceWidth, vHeight / camSourceHeight)
         val scaledW = camSourceWidth * scale
         val scaledH = camSourceHeight * scale
         val dx = (vWidth - scaledW) / 2f
         val dy = (vHeight - scaledH) / 2f
 
+        // UI Smoothing: Update smoothedTargets using EMA
+        updateSmoothedTargets()
+
         // Draw YOLO Target Bounding Boxes
         if (isYoloBoxesEnabled) {
-            for (target in targets) {
+            for (target in smoothedTargets) {
                 if (target.confidence >= sensitivityThreshold) {
                     val left = target.xMin * scaledW + dx
                     val top = target.yMin * scaledH + dy
                     val right = target.xMax * scaledW + dx
                     val bottom = target.yMax * scaledH + dy
 
-                    // Render Main Box
-                    canvas.drawRect(left, top, right, bottom, boxPaint)
+                    val paintToUse = when (target.rawLabel.lowercase()) {
+                        "person" -> personPaint
+                        "plate" -> platePaint
+                        "dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe" -> animalPaint
+                        else -> vehiclePaint
+                    }
+
+                    // Render Main Box Outline
+                    canvas.drawRect(left, top, right, bottom, paintToUse)
 
                     // Render Corner Brackets
-                    drawTargetBrackets(canvas, left, top, right, bottom)
+                    drawTargetBrackets(canvas, left, top, right, bottom, paintToUse.color)
 
-                    // Render Label
-                    canvas.drawText(
-                        "${target.label} [${(target.confidence * 100).toInt()}%]",
-                        (left + right) / 2f,
-                        top - 15f,
-                        textPaint
-                    )
+                    // Render Label Backdrop & Text
+                    val labelText = "${target.label} [${(target.confidence * 100).toInt()}%]"
+                    textPaint.color = paintToUse.color
+                    val textWidth = textPaint.measureText(labelText)
+                    val labelTop = max(30f, top - 10f)
+                    
+                    canvas.drawRect(left, labelTop - 32f, left + textWidth + 16f, labelTop + 6f, textBgPaint)
+                    canvas.drawText(labelText, left + 8f, labelTop - 6f, textPaint)
                 }
             }
         }
@@ -94,7 +133,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 val pixelX = target.relX * scaledW + dx
                 val pixelY = target.relY * scaledH + dy
 
-                canvas.drawCircle(pixelX, pixelY, 8f, boxPaint)
+                canvas.drawCircle(pixelX, pixelY, 8f, vehiclePaint)
 
                 val anchor = when (target.id) {
                     "TRACK-01" -> PointF(vWidth * 0.15f, vHeight * 0.15f)
@@ -102,17 +141,19 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     "TRACK-03" -> PointF(vWidth * 0.15f, vHeight * 0.85f)
                     else -> PointF(vWidth * 0.85f, vHeight * 0.85f)
                 }
-                tetherPaint.alpha = 120
+                tetherPaint.alpha = 140
                 canvas.drawLine(anchor.x, anchor.y, pixelX, pixelY, tetherPaint)
             }
         }
     }
 
-    private fun drawTargetBrackets(canvas: Canvas, l: Float, t: Float, r: Float, b: Float) {
+    private fun drawTargetBrackets(canvas: Canvas, l: Float, t: Float, r: Float, b: Float, colorInt: Int) {
         val bracket = 24f
-        val bracketPaint = Paint(boxPaint).apply {
-            color = Color.parseColor("#FF3366")
+        val bracketPaint = Paint().apply {
+            color = colorInt
             strokeWidth = 6f
+            style = Paint.Style.STROKE
+            isAntiAlias = true
         }
         // Top-Left
         canvas.drawLine(l, t, l + bracket, t, bracketPaint)
@@ -126,5 +167,33 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         // Bottom-Right
         canvas.drawLine(r - bracket, b, r, b, bracketPaint)
         canvas.drawLine(r, b - bracket, r, b, bracketPaint)
+    }
+
+    private fun updateSmoothedTargets() {
+        val alpha = 0.25f
+        val currentTargets = targets
+        
+        // Match existing smoothed targets to new ones (simplistic ID matching or spatial if needed)
+        // For simplicity, we'll recreate smoothed list based on indices if sizes match, or reset
+        if (smoothedTargets.size != currentTargets.size) {
+            smoothedTargets.clear()
+            smoothedTargets.addAll(currentTargets)
+        } else {
+            for (i in currentTargets.indices) {
+                val s = smoothedTargets[i]
+                val t = currentTargets[i]
+                smoothedTargets[i] = t.copy(
+                    xMin = s.xMin * (1f - alpha) + t.xMin * alpha,
+                    yMin = s.yMin * (1f - alpha) + t.yMin * alpha,
+                    xMax = s.xMax * (1f - alpha) + t.xMax * alpha,
+                    yMax = s.yMax * (1f - alpha) + t.yMax * alpha,
+                    confidence = s.confidence * (1f - alpha) + t.confidence * alpha
+                )
+            }
+        }
+        
+        if (smoothedTargets.isNotEmpty()) {
+            postInvalidateOnAnimation()
+        }
     }
 }
