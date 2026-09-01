@@ -52,41 +52,47 @@ object BestFrameSelector {
     }
 }
 
-class CaptureManager(private val context: Context) {
-    // Cooldown per track ID
+class CaptureManager(private val context: android.content.Context) {
+    private val pendingCaptures = mutableMapOf<String, BestFrame>()
     private val capturedIds = mutableMapOf<String, Long>()
-    
-    // Spatial grid cooldown: prevents identical stationary parked cars / standing people from duplicate spam
-    private val spatialLastCapture = mutableMapOf<String, Long>()
-    
-    private val trackCooldown = 25000L  // 25s cooldown per tracked target
-    private val spatialCooldown = 30000L // 30s cooldown for objects in the same screen quadrant
+    private val captureCooldown = 8000L // 8 seconds cooldown per target
 
-    fun processDetection(
-        trackId: String,
-        label: String,
-        category: EventCategory,
-        bitmap: Bitmap,
-        relX: Float,
-        relY: Float
-    ) {
+    data class BestFrame(
+        val bitmap: Bitmap,
+        val score: Float,
+        var frameCount: Int,
+        val firstSeen: Long,
+        val label: String,
+        val category: EventCategory
+    )
+
+    fun processDetection(id: String, label: String, category: EventCategory, bitmap: Bitmap, score: Float) {
         val now = System.currentTimeMillis()
         
-        // 1. Track-based cooldown check
-        val lastTrackTime = capturedIds[trackId]
-        if (lastTrackTime != null && now - lastTrackTime < trackCooldown) return
+        // Cooldown check
+        if (capturedIds[id] != null && now - capturedIds[id]!! < captureCooldown) return
 
-        // 2. Spatial grid cooldown check (Grid size: 10x10 buckets across viewport)
-        val gridKey = "${category.name}_${(relX * 10).toInt()}_${(relY * 10).toInt()}"
-        val lastSpatialTime = spatialLastCapture[gridKey]
-        if (lastSpatialTime != null && now - lastSpatialTime < spatialCooldown) return
-
+        val current = pendingCaptures[id]
         val config = bitmap.config ?: Bitmap.Config.ARGB_8888
-        val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
         
-        capturedIds[trackId] = now
-        spatialLastCapture[gridKey] = now
-        
-        EventRepository.saveEvent(context, label, category, copy)
+        if (current == null) {
+            val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
+            pendingCaptures[id] = BestFrame(copy, score, 1, now, label, category)
+        } else {
+            current.frameCount++
+            // If the new frame is sharper/better quality, replace the stored one
+            if (score > current.score) {
+                val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
+                current.bitmap.recycle() // Clean up old memory
+                pendingCaptures[id] = current.copy(bitmap = copy, score = score, frameCount = current.frameCount)
+            }
+            
+            // Commit capture to storage after observing the target for a brief window to ensure a good shot
+            if (current.frameCount >= 5 || now - current.firstSeen > 600) {
+                val best = pendingCaptures.remove(id) ?: return
+                EventRepository.saveEvent(context, best.label, best.category, best.bitmap)
+                capturedIds[id] = now
+            }
+        }
     }
 }

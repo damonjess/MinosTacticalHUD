@@ -30,7 +30,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     private val platePaint = Paint().apply {
-        color = Color.parseColor("#FFFF00") // Yellow for plates
+        color = Color.parseColor("#FFFF00")
         strokeWidth = 3f
         style = Paint.Style.STROKE
         isAntiAlias = true
@@ -59,9 +59,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
-    private val smoothedTargets = mutableListOf<YoloTarget>()
     var isYoloBoxesEnabled: Boolean = true
-    var sensitivityThreshold: Float = 0.25f // Lowered default for better detection visibility
+    var sensitivityThreshold: Float = 0.25f
 
     private var camSourceWidth = 720f
     private var camSourceHeight = 1280f
@@ -73,7 +72,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     fun updateTargets(newTargets: List<YoloTarget>) {
         targets = newTargets
-        postInvalidateOnAnimation()
+        postInvalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -83,19 +82,14 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val vHeight = height.toFloat()
         if (vWidth == 0f || vHeight == 0f) return
 
-        // Compute FILL_CENTER transform mapping matching camera aspect ratio
         val scale = max(vWidth / camSourceWidth, vHeight / camSourceHeight)
         val scaledW = camSourceWidth * scale
         val scaledH = camSourceHeight * scale
         val dx = (vWidth - scaledW) / 2f
         val dy = (vHeight - scaledH) / 2f
 
-        // UI Smoothing: Update smoothedTargets using EMA
-        updateSmoothedTargets()
-
-        // Draw YOLO Target Bounding Boxes
         if (isYoloBoxesEnabled) {
-            for (target in smoothedTargets) {
+            for (target in targets) {
                 if (target.confidence >= sensitivityThreshold) {
                     val left = target.xMin * scaledW + dx
                     val top = target.yMin * scaledH + dy
@@ -127,7 +121,6 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             }
         }
 
-        // Draw Mag-Track Tethers
         if (isYoloBoxesEnabled) {
             magTrackTargets.forEach { target ->
                 val pixelX = target.relX * scaledW + dx
@@ -167,33 +160,5 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         // Bottom-Right
         canvas.drawLine(r - bracket, b, r, b, bracketPaint)
         canvas.drawLine(r, b - bracket, r, b, bracketPaint)
-    }
-
-    private fun updateSmoothedTargets() {
-        val alpha = 0.25f
-        val currentTargets = targets
-        
-        // Match existing smoothed targets to new ones (simplistic ID matching or spatial if needed)
-        // For simplicity, we'll recreate smoothed list based on indices if sizes match, or reset
-        if (smoothedTargets.size != currentTargets.size) {
-            smoothedTargets.clear()
-            smoothedTargets.addAll(currentTargets)
-        } else {
-            for (i in currentTargets.indices) {
-                val s = smoothedTargets[i]
-                val t = currentTargets[i]
-                smoothedTargets[i] = t.copy(
-                    xMin = s.xMin * (1f - alpha) + t.xMin * alpha,
-                    yMin = s.yMin * (1f - alpha) + t.yMin * alpha,
-                    xMax = s.xMax * (1f - alpha) + t.xMax * alpha,
-                    yMax = s.yMax * (1f - alpha) + t.yMax * alpha,
-                    confidence = s.confidence * (1f - alpha) + t.confidence * alpha
-                )
-            }
-        }
-        
-        if (smoothedTargets.isNotEmpty()) {
-            postInvalidateOnAnimation()
-        }
     }
 }

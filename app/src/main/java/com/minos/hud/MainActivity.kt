@@ -54,13 +54,14 @@ class MainActivity : ComponentActivity() {
     private var cameraControl: CameraControl? = null
     private var cameraInfo: CameraInfo? = null
 
-    private val modelInputSize = 320
+    // Pre-allocated reusable buffers to eliminate Garbage Collection churn
+    // MUST BE 640 to match the expected input shape of the yolov8n.onnx file
+    private val modelInputSize = 640 
     private val tensorBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
     private val pixelArray = IntArray(modelInputSize * modelInputSize)
     private val letterboxBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
     private val letterboxCanvas = Canvas(letterboxBitmap)
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-
 
     private var isScanning by mutableStateOf(true)
     private var fpsValue by mutableStateOf(0)
@@ -70,7 +71,7 @@ class MainActivity : ComponentActivity() {
     private var motionArrayOn by mutableStateOf(true)
     private var autoTargetLock by mutableStateOf(true)
     private var digitalZoom by mutableStateOf(1.0f)
-    private var sensitivityThreshold by mutableStateOf(0.25f)
+    private var sensitivityThreshold by mutableStateOf(0.15f)
     private var showDossier by mutableStateOf(false)
     private var isYoloBoxesEnabled by mutableStateOf(true)
     private var maxDetections by mutableStateOf(15)
@@ -245,7 +246,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun CaptureHUD(onLogsClick: () -> Unit, onSettingsClick: () -> Unit) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top Bar
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 40.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -279,7 +279,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Status
             Text(
                 text = "LIVE  •  ${trackedTargets.size} TARGETS  •  ${if(isScanning) "Scanning" else "Paused"}",
                 color = Color(0xFF00A8FF),
@@ -290,7 +289,6 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Profile Selection
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text(text = "PROFILE  •  $currentProfile", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 Spacer(modifier = Modifier.height(6.dp))
@@ -305,7 +303,6 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Bottom Controls
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -557,8 +554,6 @@ class MainActivity : ComponentActivity() {
             val env = ortEnv ?: return
             
             val options = OrtSession.SessionOptions().apply {
-                // NNAPI disabled: Highly unstable on YOLOv8 exports across different Android devices (causes 0 targets).
-                // Instead, we maximize CPU multithreading for the ONNX Runtime to keep speeds high.
                 setIntraOpNumThreads(4)
                 setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
             }
@@ -581,11 +576,10 @@ class MainActivity : ComponentActivity() {
                 it.setSurfaceProvider(view.surfaceProvider)
             }
 
-            // Upgraded to 1080x1920 high resolution stream for sharp crops
+            // Using default YUV stream so toBitmap() performs exact native conversion
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(1080, 1920))
+                .setTargetResolution(Size(720, 1280))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build().also {
                     it.setAnalyzer(cameraExecutor) { imageProxy ->
                         runOnUiThread { updateFps() }
@@ -610,19 +604,17 @@ class MainActivity : ComponentActivity() {
         val startTime = System.currentTimeMillis()
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
 
-        // 1. Extract Bitmap safely using CameraX native conversion to prevent channel corruption
+        // Native Bitmap extraction
         val rawBitmap = try {
             imageProxy.toBitmap()
         } catch (e: Exception) {
             null
         }
 
-        // Close immediately after extraction to free memory for the next frame
         imageProxy.close() 
 
         if (rawBitmap == null) return
 
-        // 2. Rotate Bitmap according to camera sensor rotation
         val rotatedBitmap = if (rotationDegrees != 0) {
             val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
             val rotBmp = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
@@ -632,10 +624,8 @@ class MainActivity : ComponentActivity() {
             rawBitmap
         }
 
-        // Notify HUD Overlay of the upright camera aspect ratio for accurate scaling
         hudOverlay?.setCameraSourceDimensions(rotatedBitmap.width, rotatedBitmap.height)
 
-        // 3. Preprocess with Aspect-Ratio Preserving Letterboxing
         val letterboxInfo = preprocessLetterbox(rotatedBitmap)
         val env = ortEnv ?: return
 
@@ -648,7 +638,6 @@ class MainActivity : ComponentActivity() {
             if (outputs != null) {
                 val targets = postProcess(outputs, rotatedBitmap, letterboxInfo).toMutableList()
                 
-                // Track update & capture synchronously while crops are fresh
                 val plateTargets = updateMagTrackTargets(targets)
                 targets.addAll(plateTargets)
 
@@ -706,19 +695,31 @@ class MainActivity : ComponentActivity() {
     ): List<YoloTarget> {
         val outputTensor = outputs.get(0) as OnnxTensor
         val buffer = outputTensor.floatBuffer
+        buffer.rewind() // Safety rewind
         val shape = outputTensor.info.shape
-        val numElements = shape[2].toInt()
-        val numChannels = shape[1].toInt()
-        val candidateTargets = mutableListOf<YoloTarget>()
+        
+        // Supports both [1, 84, 8400] and [1, 8400, 84] YOLOv8 export layouts
+        val dim1 = shape[1].toInt()
+        val dim2 = shape[2].toInt()
+        val isTransposed = dim2 == 84 || dim2 == 85 // 85 if it includes obj score (YOLOv5 style)
+        val numElements = if (isTransposed) dim1 else dim2
+        val numChannels = if (isTransposed) dim2 else dim1
 
+        val candidateTargets = mutableListOf<YoloTarget>()
         val srcW = sourceBitmap.width.toFloat()
         val srcH = sourceBitmap.height.toFloat()
 
         for (i in 0 until numElements) {
             var maxScore = 0f
             var maxClassId = -1
+            
+            // Classes start at index 4 (0:cx, 1:cy, 2:w, 3:h)
             for (c in 4 until numChannels) {
-                val score = buffer.get(c * numElements + i)
+                val score = if (isTransposed) {
+                    buffer.get(i * numChannels + c)
+                } else {
+                    buffer.get(c * numElements + i)
+                }
                 if (score > maxScore) {
                     maxScore = score
                     maxClassId = c - 4
@@ -726,11 +727,12 @@ class MainActivity : ComponentActivity() {
             }
 
             if (maxScore >= sensitivityThreshold) {
-                val cx = buffer.get(i)
-                val cy = buffer.get(numElements + i)
-                val w = buffer.get(2 * numElements + i)
-                val h = buffer.get(3 * numElements + i)
+                val cx = if (isTransposed) buffer.get(i * numChannels + 0) else buffer.get(0 * numElements + i)
+                val cy = if (isTransposed) buffer.get(i * numChannels + 1) else buffer.get(1 * numElements + i)
+                val w = if (isTransposed) buffer.get(i * numChannels + 2) else buffer.get(2 * numElements + i)
+                val h = if (isTransposed) buffer.get(i * numChannels + 3) else buffer.get(3 * numElements + i)
 
+                // Convert to normalized coordinates (0..1) relative to sourceBitmap
                 val xMin = ((cx - w / 2f) - info.padX) / (srcW * info.scale)
                 val yMin = ((cy - h / 2f) - info.padY) / (srcH * info.scale)
                 val xMax = ((cx + w / 2f) - info.padX) / (srcW * info.scale)
@@ -755,14 +757,26 @@ class MainActivity : ComponentActivity() {
 
         val nmsSelected = nms(candidateTargets)
         return nmsSelected.take(maxDetections).map { target ->
-            val left = (target.xMin * sourceBitmap.width).toInt().coerceIn(0, sourceBitmap.width - 1)
-            val top = (target.yMin * sourceBitmap.height).toInt().coerceIn(0, sourceBitmap.height - 1)
-            val w = ((target.xMax - target.xMin) * sourceBitmap.width).toInt().coerceIn(1, sourceBitmap.width - left)
-            val h = ((target.yMax - target.yMin) * sourceBitmap.height).toInt().coerceIn(1, sourceBitmap.height - top)
+            // Base tight boundaries
+            val left = (target.xMin * sourceBitmap.width).toFloat()
+            val top = (target.yMin * sourceBitmap.height).toFloat()
+            val w = ((target.xMax - target.xMin) * sourceBitmap.width).toFloat()
+            val h = ((target.yMax - target.yMin) * sourceBitmap.height).toFloat()
             
-            // High-resolution crop copy
+            // Add 40% contextual padding for better display/logs
+            val padX = w * 0.4f
+            val padY = h * 0.4f
+            
+            val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
+            val paddedTop = (top - padY).toInt().coerceAtLeast(0)
+            val paddedRight = (left + w + padX).toInt().coerceAtMost(sourceBitmap.width - 1)
+            val paddedBottom = (top + h + padY).toInt().coerceAtMost(sourceBitmap.height - 1)
+            
+            val paddedW = (paddedRight - paddedLeft).coerceAtLeast(1)
+            val paddedH = (paddedBottom - paddedTop).coerceAtLeast(1)
+            
             val crop = try { 
-                val cropped = Bitmap.createBitmap(sourceBitmap, left, top, w, h)
+                val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
                 cropped.copy(Bitmap.Config.ARGB_8888, false)
             } catch (e: Exception) { null }
 
@@ -805,19 +819,17 @@ class MainActivity : ComponentActivity() {
 
                 if (distSq < 0.16f) {
                     unassignedTargets.remove(bestMatch)
-                    val smoothedX = track.relX * 0.2f + targetCenterX * 0.8f
-                    val smoothedY = track.relY * 0.2f + targetCenterY * 0.8f
-
-                    val updatedTrack = track.copy(
-                        rawLabel = bestMatch.rawLabel,
-                        relX = smoothedX,
-                        relY = smoothedY,
-                        coordinateLabel = "X:${(bestMatch.xMin * 100).toInt()} Y:${(bestMatch.yMin * 100).toInt()} Z:${(bestMatch.confidence * 100).toInt()}%",
-                        crop = bestMatch.crop ?: track.crop
+                    // REMOVED EMA SMOOTHING: Instantly snap to target for zero lag
+                    updatedTracks.add(
+                        track.copy(
+                            rawLabel = bestMatch.rawLabel,
+                            relX = targetCenterX,
+                            relY = targetCenterY,
+                            coordinateLabel = "X:${(bestMatch.xMin * 100).toInt()} Y:${(bestMatch.yMin * 100).toInt()} Z:${(bestMatch.confidence * 100).toInt()}%",
+                            crop = bestMatch.crop ?: track.crop
+                        )
                     )
-                    updatedTracks.add(updatedTrack)
 
-                    // Plate Detection for tracked vehicles
                     val raw = bestMatch.rawLabel.lowercase()
                     if (raw in listOf("car", "bus", "truck", "motorcycle")) {
                         bestMatch.crop?.let { vehicleCrop ->
@@ -839,7 +851,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Add newly identified targets with persistent TRACK-IDs
         unassignedTargets.take(4 - updatedTracks.size).forEach { yolo ->
             val cx = (yolo.xMin + yolo.xMax) / 2f
             val cy = (yolo.yMin + yolo.yMax) / 2f
@@ -855,7 +866,6 @@ class MainActivity : ComponentActivity() {
             )
             updatedTracks.add(newTrack)
 
-            // Plate Detection for new vehicles
             if (yolo.rawLabel.lowercase() in listOf("car", "bus", "truck", "motorcycle")) {
                 yolo.crop?.let { vehicleCrop ->
                     licensePlateDetector?.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
@@ -883,7 +893,6 @@ class MainActivity : ComponentActivity() {
             hudOverlay?.magTrackTargets = updatedTracks
         }
 
-        // Deduplicated and Stabilized Logging
         if (isCaptureOn) {
             val now = System.currentTimeMillis()
             updatedTracks.forEach { track ->
@@ -897,15 +906,12 @@ class MainActivity : ComponentActivity() {
 
                 if (category != null) {
                     track.crop?.let { bitmap ->
-                        // 1. Process vehicle/person/animal capture (with 25s stationary cooldown)
-                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, track.relX, track.relY)
+                        val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
+                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score)
 
-                        // 2. License Plate Detector for vehicles - Cooldown only for SAVING
                         if (raw in listOf("car", "bus", "truck", "motorcycle")) {
                             val lastPlateTime = plateCooldownMap[track.id]
                             if (lastPlateTime == null || now - lastPlateTime > 30000L) {
-                                // Find the plate from the current frame's plateTargets if possible, 
-                                // or just run it again for saving (it was already run above for the HUD)
                                 licensePlateDetector?.detectAndCropPlate(bitmap)?.let { result ->
                                     plateCooldownMap[track.id] = now
                                     EventRepository.saveEvent(
