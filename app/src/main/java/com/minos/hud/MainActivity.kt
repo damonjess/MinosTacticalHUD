@@ -16,7 +16,6 @@ import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -34,7 +33,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraExecutor: ExecutorService
     private var cameraControl: CameraControl? = null
     private var cameraInfo: CameraInfo? = null
-    private var imageCapture: ImageCapture? = null
 
     private var hudOverlay: HUDOverlayView? = null
     private var previewView: PreviewView? = null
@@ -67,7 +65,6 @@ class MainActivity : ComponentActivity() {
                 cameraControl?.setZoomRatio(newZoom)
             },
             getIsCaptureOn = { viewModel.isCaptureOn },
-            getImageCapture = { imageCapture },
             onTargetsDetected = { magTargets, yoloTargets, inferenceTimeMs, rotatedWidth, rotatedHeight ->
                 viewModel.updateTrackedTargets(magTargets)
                 viewModel.inferenceValue = inferenceTimeMs
@@ -169,19 +166,13 @@ class MainActivity : ComponentActivity() {
                     it.setAnalyzer(cameraExecutor, analyzer)
                 }
 
-            val imageCaptureUseCase = ImageCapture.Builder()
-                .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                .build()
-            imageCapture = imageCaptureUseCase
-
             try {
                 cameraProvider.unbindAll()
                 val camera = cameraProvider.bindToLifecycle(
                     this,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
-                    cameraImageAnalysis,
-                    imageCaptureUseCase
+                    cameraImageAnalysis
                 )
                 cameraControl = camera.cameraControl
                 cameraInfo = camera.cameraInfo

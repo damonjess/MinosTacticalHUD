@@ -14,8 +14,6 @@ import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.core.content.ContextCompat
 import java.nio.FloatBuffer
@@ -33,7 +31,6 @@ class OnnxImageAnalyzer(
     private val getDigitalZoom: () -> Float,
     private val setDigitalZoom: (Float) -> Unit,
     private val getIsCaptureOn: () -> Boolean,
-    private val getImageCapture: () -> ImageCapture?,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onFpsUpdated: (fps: Int) -> Unit
 ) : ImageAnalysis.Analyzer, AutoCloseable {
@@ -45,7 +42,6 @@ class OnnxImageAnalyzer(
 
     private var licensePlateDetector: LicensePlateDetector? = null
     private val captureManager = CaptureManager(context)
-    private val highResCooldownMap = mutableMapOf<String, Long>()
     private val captureExecutor = Executors.newSingleThreadExecutor()
 
     // Pre-allocated reusable buffers to eliminate Garbage Collection churn
@@ -509,7 +505,6 @@ class OnnxImageAnalyzer(
         activeTracks.addAll(updatedTracks)
 
         if (getIsCaptureOn()) {
-            val now = System.currentTimeMillis()
             updatedTracks.forEach { track ->
                 val raw = track.rawLabel.lowercase().trim()
                 val category = when (raw) {
@@ -519,96 +514,24 @@ class OnnxImageAnalyzer(
                 }
 
                 if (category != null) {
-                    val lastCaptureTime = highResCooldownMap[track.id] ?: 0L
-
-                    // 8-second cooldown prevents shutter spam
-                    if (now - lastCaptureTime > 8000L) {
-                        val imageCaptureInstance = getImageCapture()
-                        if (imageCaptureInstance != null) {
-                            highResCooldownMap[track.id] = now
-
-                            val target = YoloTarget(
-                                id = track.id,
-                                label = track.trackLabel,
-                                rawLabel = track.rawLabel,
-                                confidence = 0.9f,
-                                xMin = track.xMin,
-                                yMin = track.yMin,
-                                xMax = track.xMax,
-                                yMax = track.yMax
-                            )
-
-                            imageCaptureInstance.takePicture(
-                                captureExecutor,
-                                object : ImageCapture.OnImageCapturedCallback() {
-                                    override fun onCaptureSuccess(image: ImageProxy) {
-                                        processHighResCrop(image, target, category)
-                                    }
-
-                                    override fun onError(exception: ImageCaptureException) {
-                                        exception.printStackTrace()
-                                    }
-                                }
-                            )
-                        } else {
-                            // Fallback to low-res frame capture if ImageCapture is unavailable
-                            track.crop?.let { bitmap ->
-                                val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
-                                captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score)
-                            }
-                        }
+                    track.crop?.let { bitmap ->
+                        val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
+                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score)
                     }
+                }
+            }
+            
+            // Also process plates through CaptureManager
+            plateTargets.forEach { plateTarget ->
+                plateTarget.crop?.let { bitmap ->
+                    val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
+                    // Generate a deterministic ID for the plate based on its parent vehicle bounds to group captures
+                    val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
+                    captureManager.processDetection(plateId, "LICENSE PLATE", EventCategory.PLATES, bitmap, score)
                 }
             }
         }
         return plateTargets
-    }
-
-    private fun processHighResCrop(image: ImageProxy, yoloTarget: YoloTarget, category: EventCategory) {
-        try {
-            val rotation = image.imageInfo.rotationDegrees
-            val rawBitmap = image.toBitmap()
-
-            val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-            val rotatedHighRes = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-
-            val cropLeft = (yoloTarget.xMin * rotatedHighRes.width).toInt().coerceAtLeast(0)
-            val cropTop = (yoloTarget.yMin * rotatedHighRes.height).toInt().coerceAtLeast(0)
-            val cropWidth = ((yoloTarget.xMax - yoloTarget.xMin) * rotatedHighRes.width)
-                .toInt().coerceAtMost(rotatedHighRes.width - cropLeft)
-            val cropHeight = ((yoloTarget.yMax - yoloTarget.yMin) * rotatedHighRes.height)
-                .toInt().coerceAtMost(rotatedHighRes.height - cropTop)
-
-            if (cropWidth > 0 && cropHeight > 0) {
-                val highResCrop = Bitmap.createBitmap(rotatedHighRes, cropLeft, cropTop, cropWidth, cropHeight)
-
-                EventRepository.saveEvent(
-                    context = context,
-                    label = "HI-RES // ${yoloTarget.rawLabel.uppercase()}",
-                    category = category,
-                    bitmap = highResCrop
-                )
-
-                val raw = yoloTarget.rawLabel.lowercase().trim()
-                if (raw in listOf("car", "bus", "truck", "motorcycle")) {
-                    licensePlateDetector?.detectAndCropPlate(highResCrop)?.let { plateResult ->
-                        EventRepository.saveEvent(
-                            context = context,
-                            label = "PLATE // ${raw.uppercase()}",
-                            category = EventCategory.PLATES,
-                            bitmap = plateResult.plateCrop
-                        )
-                    }
-                }
-            }
-
-            if (rawBitmap != rotatedHighRes) rawBitmap.recycle()
-            rotatedHighRes.recycle()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            image.close()
-        }
     }
 
     private fun updateFps() {
