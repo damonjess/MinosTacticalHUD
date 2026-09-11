@@ -19,8 +19,10 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun IsolatedHeaderTerminalBlock(
-    currentFps: Int,
-    inferenceTimeMs: Int,
+    currentFps: Int = 0,
+    inferenceTimeMs: Int = 0,
+    fpsProvider: () -> Int = { currentFps },
+    inferenceProvider: () -> Int = { inferenceTimeMs },
     onViewMapClick: () -> Unit = {},
     onSettingsClick: () -> Unit = {}
 ) {
@@ -91,24 +93,34 @@ fun IsolatedHeaderTerminalBlock(
         ) {
             // Hardbound constraint width guarantees the values never float near each other
             Box(modifier = Modifier.width(120.dp)) {
-                Text(
-                    text = "FPS: $currentFps",
-                    color = Color(0xFF00FF66).copy(alpha = 0.9f),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                IsolatedFpsText(fpsProvider = fpsProvider)
             }
             
             Box {
-                Text(
-                    text = "INF: ${inferenceTimeMs}ms",
-                    color = Color(0xFF00FF66).copy(alpha = 0.9f),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                IsolatedInferenceText(inferenceProvider = inferenceProvider)
             }
         }
     }
+}
+
+@Composable
+private fun IsolatedFpsText(fpsProvider: () -> Int) {
+    Text(
+        text = "FPS: ${fpsProvider()}",
+        color = Color(0xFF00FF66),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold
+    )
+}
+
+@Composable
+private fun IsolatedInferenceText(inferenceProvider: () -> Int) {
+    Text(
+        text = "INF: ${inferenceProvider()}ms",
+        color = Color(0xFF00FF66),
+        fontFamily = FontFamily.Monospace,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold
+    )
 }

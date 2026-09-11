@@ -74,11 +74,6 @@ dependencies {
     // ONNX Runtime (mobile build, smaller footprint)
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.18.0'
 
-    // TensorFlow Lite
-    implementation libs.tensorflow.lite
-    implementation libs.tensorflow.lite.support
-    implementation libs.tensorflow.lite.gpu
-
     // Existing project deps
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'

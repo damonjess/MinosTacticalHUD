@@ -1,45 +1,71 @@
 package com.minos.hud
 
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import androidx.annotation.OptIn
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.compose.ui.geometry.Offset
-import org.tensorflow.lite.DataType
-import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.image.ImageProcessor
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.support.image.ops.ResizeOp
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.nio.FloatBuffer
+import java.util.Collections
 import kotlin.math.max
 import kotlin.math.min
 
 class YoloAnalyzer(
     context: Context,
-    private val modelPath: String = "yolov8n.tflite",
+    private val modelPath: String = "yolov8n.onnx",
     private val onTargetsDetected: (List<DynamicYoloBox>, Long) -> Unit
-) : ImageAnalysis.Analyzer {
+) : ImageAnalysis.Analyzer, AutoCloseable {
 
-    private val tflite: Interpreter
+    private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment()
+    private var ortSession: OrtSession? = null
     private val labels = mutableListOf<String>()
 
     private val modelInputSize = 640
     private val confidenceThreshold = 0.45f
 
-    // Reusable byte buffer pre-allocated once to prevent GC pauses
-    private val outputBuffer: ByteBuffer = ByteBuffer.allocateDirect(1 * 84 * 8400 * 4)
-        .order(ByteOrder.nativeOrder())
+    // Pre-allocated reusable buffers to prevent GC pauses
+    private val tensorBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
+    private val pixelArray = IntArray(modelInputSize * modelInputSize)
+    private val letterboxBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
+    private val letterboxCanvas = Canvas(letterboxBitmap)
+    private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     init {
-        val options = Interpreter.Options().apply {
-            setNumThreads(4)
+        val options = OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(4)
+            setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+            try {
+                addNnapi()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
-        tflite = Interpreter(FileUtil.loadMappedFile(context, modelPath), options)
 
         try {
-            labels.addAll(FileUtil.loadLabels(context, "coco_labels.txt"))
+            context.assets.open(modelPath).use { input ->
+                ortSession = ortEnv.createSession(input.readBytes(), options)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            context.assets.open("coco_labels.txt").use { stream ->
+                BufferedReader(InputStreamReader(stream)).useLines { lines ->
+                    lines.forEach { labels.add(it) }
+                }
+            }
         } catch (e: Exception) {
             labels.addAll(
                 listOf(
@@ -58,9 +84,13 @@ class YoloAnalyzer(
         }
     }
 
-    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+    @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         val startTime = System.currentTimeMillis()
+        val session = ortSession ?: run {
+            imageProxy.close()
+            return
+        }
 
         val rawBitmap = imageProxy.toBitmap() ?: run {
             imageProxy.close()
@@ -71,68 +101,110 @@ class YoloAnalyzer(
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         val bitmap = if (rotationDegrees != 0) {
             val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-            val rotBmp = android.graphics.Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+            val rotBmp = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
             rawBitmap.recycle()
             rotBmp
         } else {
             rawBitmap
         }
 
-        // Prepare Tensor Image
-        var tensorImage = TensorImage(DataType.FLOAT32)
-        tensorImage.load(bitmap)
+        val srcW = bitmap.width.toFloat()
+        val srcH = bitmap.height.toFloat()
+        val scale = min(modelInputSize / srcW, modelInputSize / srcH)
+        val dstW = srcW * scale
+        val dstH = srcH * scale
+        val padX = (modelInputSize - dstW) / 2f
+        val padY = (modelInputSize - dstH) / 2f
 
-        val imageProcessor = ImageProcessor.Builder()
-            .add(ResizeOp(modelInputSize, modelInputSize, ResizeOp.ResizeMethod.BILINEAR))
-            .build()
-        tensorImage = imageProcessor.process(tensorImage)
+        letterboxCanvas.drawColor(Color.BLACK)
+        val matrix = Matrix().apply {
+            postScale(scale, scale)
+            postTranslate(padX, padY)
+        }
+        letterboxCanvas.drawBitmap(bitmap, matrix, letterboxPaint)
 
-        // Run Inference into pre-allocated buffer
-        outputBuffer.rewind()
-        tflite.run(tensorImage.buffer, outputBuffer)
-        outputBuffer.rewind()
+        tensorBuffer.rewind()
+        letterboxBitmap.getPixels(pixelArray, 0, modelInputSize, 0, 0, modelInputSize, modelInputSize)
+
+        val totalPixels = modelInputSize * modelInputSize
+        for (i in 0 until totalPixels) {
+            val pixel = pixelArray[i]
+            tensorBuffer.put(i, ((pixel shr 16) and 0xFF) / 255f)
+            tensorBuffer.put(i + totalPixels, ((pixel shr 8) and 0xFF) / 255f)
+            tensorBuffer.put(i + 2 * totalPixels, (pixel and 0xFF) / 255f)
+        }
+        tensorBuffer.rewind()
 
         val candidateList = mutableListOf<DynamicYoloBox>()
-        val floatBuffer = outputBuffer.asFloatBuffer()
 
-        for (i in 0 until 8400) {
-            var maxScore = 0f
-            var maxClassId = -1
+        try {
+            val inputTensor = OnnxTensor.createTensor(
+                ortEnv,
+                tensorBuffer,
+                longArrayOf(1, 3, modelInputSize.toLong(), modelInputSize.toLong())
+            )
+            val results = session.run(Collections.singletonMap(session.inputNames.iterator().next(), inputTensor))
 
-            for (c in 0 until min(80, labels.size)) {
-                val score = floatBuffer.get((4 + c) * 8400 + i)
-                if (score > maxScore) {
-                    maxScore = score
-                    maxClassId = c
+            if (results != null) {
+                val outputTensor = results.get(0) as OnnxTensor
+                val floatBuffer = outputTensor.floatBuffer
+                floatBuffer.rewind()
+                val shape = outputTensor.info.shape
+
+                val dim1 = shape[1].toInt()
+                val dim2 = shape[2].toInt()
+                val isTransposed = dim2 == 84 || dim2 == 85
+                val numElements = if (isTransposed) dim1 else dim2
+                val numChannels = if (isTransposed) dim2 else dim1
+
+                for (i in 0 until numElements) {
+                    var maxScore = 0f
+                    var maxClassId = -1
+
+                    for (c in 4 until numChannels) {
+                        val score = if (isTransposed) {
+                            floatBuffer.get(i * numChannels + c)
+                        } else {
+                            floatBuffer.get(c * numElements + i)
+                        }
+                        if (score > maxScore) {
+                            maxScore = score
+                            maxClassId = c - 4
+                        }
+                    }
+
+                    if (maxScore > confidenceThreshold) {
+                        val cx = if (isTransposed) floatBuffer.get(i * numChannels + 0) else floatBuffer.get(0 * numElements + i)
+                        val cy = if (isTransposed) floatBuffer.get(i * numChannels + 1) else floatBuffer.get(1 * numElements + i)
+                        val w = if (isTransposed) floatBuffer.get(i * numChannels + 2) else floatBuffer.get(2 * numElements + i)
+                        val h = if (isTransposed) floatBuffer.get(i * numChannels + 3) else floatBuffer.get(3 * numElements + i)
+
+                        val xMin = (((cx - w / 2f) - padX) / (srcW * scale)).coerceIn(0f, 1f)
+                        val yMin = (((cy - h / 2f) - padY) / (srcH * scale)).coerceIn(0f, 1f)
+                        val xMax = (((cx + w / 2f) - padX) / (srcW * scale)).coerceIn(0f, 1f)
+                        val yMax = (((cy + h / 2f) - padY) / (srcH * scale)).coerceIn(0f, 1f)
+
+                        val label = labels.getOrNull(maxClassId) ?: "UNKNOWN"
+
+                        candidateList.add(
+                            DynamicYoloBox(
+                                label = label,
+                                confidence = maxScore,
+                                relativeAnchor = Offset((xMin + xMax) / 2f, (yMin + yMax) / 2f),
+                                xMin = xMin,
+                                yMin = yMin,
+                                xMax = xMax,
+                                yMax = yMax,
+                                infoTag = "${label.uppercase()} // ${(maxScore * 100).toInt()}% CONF"
+                            )
+                        )
+                    }
                 }
+                inputTensor.close()
+                results.close()
             }
-
-            if (maxScore > confidenceThreshold) {
-                val cx = floatBuffer.get(0 * 8400 + i)
-                val cy = floatBuffer.get(1 * 8400 + i)
-                val w = floatBuffer.get(2 * 8400 + i)
-                val h = floatBuffer.get(3 * 8400 + i)
-
-                val xMin = ((cx - w / 2f) / modelInputSize).coerceIn(0f, 1f)
-                val yMin = ((cy - h / 2f) / modelInputSize).coerceIn(0f, 1f)
-                val xMax = ((cx + w / 2f) / modelInputSize).coerceIn(0f, 1f)
-                val yMax = ((cy + h / 2f) / modelInputSize).coerceIn(0f, 1f)
-
-                val label = labels.getOrNull(maxClassId) ?: "UNKNOWN"
-
-                candidateList.add(
-                    DynamicYoloBox(
-                        label = label,
-                        confidence = maxScore,
-                        relativeAnchor = Offset((xMin + xMax) / 2f, (yMin + yMax) / 2f),
-                        xMin = xMin,
-                        yMin = yMin,
-                        xMax = xMax,
-                        yMax = yMax,
-                        infoTag = "${label.uppercase()} // ${(maxScore * 100).toInt()}% CONF"
-                    )
-                )
-            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         val filteredBoxes = applyNms(candidateList)
@@ -167,5 +239,12 @@ class YoloAnalyzer(
         val intersectionArea = max(0f, min(a.xMax, b.xMax) - max(a.xMin, b.xMin)) *
                 max(0f, min(a.yMax, b.yMax) - max(a.yMin, b.yMin))
         return intersectionArea / (areaA + areaB - intersectionArea)
+    }
+
+    override fun close() {
+        ortSession?.close()
+        if (!letterboxBitmap.isRecycled) {
+            letterboxBitmap.recycle()
+        }
     }
 }

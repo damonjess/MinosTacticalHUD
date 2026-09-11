@@ -55,6 +55,66 @@ fun PanopticoreScreen(viewModel: PanopticoreViewModel = androidx.lifecycle.viewm
 
 @Composable
 fun TacticalCanvas(viewModel: PanopticoreViewModel) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 1. Static Frame Brackets Layer (rendered once upon layout/size change)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            
+            val bracketSize = 40f
+            val thickness = 4f
+            val color = PanopticoreColors.CyberCyan
+            
+            // Top Left
+            drawLine(color, Offset(20f, 20f), Offset(20f + bracketSize, 20f), thickness)
+            drawLine(color, Offset(20f, 20f), Offset(20f, 20f + bracketSize), thickness)
+            // Top Right
+            drawLine(color, Offset(w - 20f, 20f), Offset(w - 20f - bracketSize, 20f), thickness)
+            drawLine(color, Offset(w - 20f, 20f), Offset(w - 20f, 20f + bracketSize), thickness)
+            // Bottom Left
+            drawLine(color, Offset(20f, h - 20f), Offset(20f + bracketSize, h - 20f), thickness)
+            drawLine(color, Offset(20f, h - 20f), Offset(20f, h - 20f - bracketSize), thickness)
+            // Bottom Right
+            drawLine(color, Offset(w - 20f, h - 20f), Offset(w - 20f - bracketSize, h - 20f), thickness)
+            drawLine(color, Offset(w - 20f, h - 20f), Offset(w - 20f, h - 20f - bracketSize), thickness)
+        }
+
+        // 2. Dynamic Radar Sweep Line Layer (isolated continuous animation)
+        if (viewModel.radarSweepEnabled) {
+            RadarSweepCanvas(modifier = Modifier.fillMaxSize())
+        }
+
+        // 3. Dynamic Targets Overlay Layer (invalidated only when ML detection targets update)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            
+            viewModel.trackedTargets.forEach { target ->
+                val rectWidth = (target.xMax - target.xMin) * w
+                val rectHeight = (target.yMax - target.yMin) * h
+                val topLeft = Offset(target.xMin * w, target.yMin * h)
+                
+                // Bounding Box
+                drawRect(
+                    color = PanopticoreColors.PrimaryGreen,
+                    topLeft = topLeft,
+                    size = Size(rectWidth, rectHeight),
+                    style = Stroke(2f)
+                )
+                
+                // Crosshair
+                val centerX = target.anchor.x * w
+                val centerY = target.anchor.y * h
+                val crossSize = 15f
+                drawLine(PanopticoreColors.CyberCyan, Offset(centerX - crossSize, centerY), Offset(centerX + crossSize, centerY), 1.5f)
+                drawLine(PanopticoreColors.CyberCyan, Offset(centerX, centerY - crossSize), Offset(centerX, centerY + crossSize), 1.5f)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RadarSweepCanvas(modifier: Modifier = Modifier) {
     val infiniteTransition = rememberInfiniteTransition(label = "RadarSweep")
     val radarRotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -66,58 +126,18 @@ fun TacticalCanvas(viewModel: PanopticoreViewModel) {
         label = "RadarRotation"
     )
 
-    Canvas(modifier = Modifier.fillMaxSize()) {
+    Canvas(modifier = modifier) {
         val w = size.width
-        val h = size.height
-        
-        // Draw Frame Brackets
-        val bracketSize = 40f
-        val thickness = 4f
         val color = PanopticoreColors.CyberCyan
-        
-        // Top Left
-        drawLine(color, Offset(20f, 20f), Offset(20f + bracketSize, 20f), thickness)
-        drawLine(color, Offset(20f, 20f), Offset(20f, 20f + bracketSize), thickness)
-        // Top Right
-        drawLine(color, Offset(w - 20f, 20f), Offset(w - 20f - bracketSize, 20f), thickness)
-        drawLine(color, Offset(w - 20f, 20f), Offset(w - 20f, 20f + bracketSize), thickness)
-        // Bottom Left
-        drawLine(color, Offset(20f, h - 20f), Offset(20f + bracketSize, h - 20f), thickness)
-        drawLine(color, Offset(20f, h - 20f), Offset(20f, h - 20f - bracketSize), thickness)
-        // Bottom Right
-        drawLine(color, Offset(w - 20f, h - 20f), Offset(w - 20f - bracketSize, h - 20f), thickness)
-        drawLine(color, Offset(w - 20f, h - 20f), Offset(w - 20f, h - 20f - bracketSize), thickness)
+        val radarRadius = 80f
+        val radarCenter = Offset(w - 120f, 150f)
 
-        // Draw Radar
-        if (viewModel.radarSweepEnabled) {
-            val radarRadius = 80f
-            val radarCenter = Offset(w - 120f, 150f)
-            drawCircle(color.copy(alpha = 0.2f), radarRadius, radarCenter, style = Stroke(2f))
-            rotate(radarRotation, radarCenter) {
-                drawLine(color, radarCenter, Offset(radarCenter.x, radarCenter.y - radarRadius), 3f)
-            }
-        }
+        // Radar background ring
+        drawCircle(color.copy(alpha = 0.2f), radarRadius, radarCenter, style = Stroke(2f))
 
-        // Draw Targets
-        viewModel.trackedTargets.forEach { target ->
-            val rectWidth = (target.xMax - target.xMin) * w
-            val rectHeight = (target.yMax - target.yMin) * h
-            val topLeft = Offset(target.xMin * w, target.yMin * h)
-            
-            // Bounding Box
-            drawRect(
-                color = PanopticoreColors.PrimaryGreen,
-                topLeft = topLeft,
-                size = Size(rectWidth, rectHeight),
-                style = Stroke(2f)
-            )
-            
-            // Crosshair
-            val centerX = target.anchor.x * w
-            val centerY = target.anchor.y * h
-            val crossSize = 15f
-            drawLine(PanopticoreColors.CyberCyan, Offset(centerX - crossSize, centerY), Offset(centerX + crossSize, centerY), 1.5f)
-            drawLine(PanopticoreColors.CyberCyan, Offset(centerX, centerY - crossSize), Offset(centerX, centerY + crossSize), 1.5f)
+        // Dynamic sweeping radar line
+        rotate(radarRotation, radarCenter) {
+            drawLine(color, radarCenter, Offset(radarCenter.x, radarCenter.y - radarRadius), 3f)
         }
     }
 }
@@ -142,18 +162,18 @@ fun TelemetryHeader(viewModel: PanopticoreViewModel) {
         )
         
         Row(modifier = Modifier.padding(top = 12.dp)) {
-            MetricBlock("FPS", viewModel.currentFps.toString())
+            MetricBlock("FPS") { viewModel.currentFps.toString() }
             Spacer(modifier = Modifier.width(24.dp))
-            MetricBlock("INF", "${viewModel.inferenceTimeMs}ms")
+            MetricBlock("INF") { "${viewModel.inferenceTimeMs}ms" }
         }
     }
 }
 
 @Composable
-fun MetricBlock(label: String, value: String) {
+fun MetricBlock(label: String, valueProvider: () -> String) {
     Column {
         Text(label, style = PanopticoreTypography.TechBody, color = Color.Gray)
-        Text(value, style = PanopticoreTypography.MetricValue)
+        Text(valueProvider(), style = PanopticoreTypography.MetricValue)
     }
 }
 
@@ -162,7 +182,7 @@ fun ControlDeck(viewModel: PanopticoreViewModel) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(PanopticoreColors.Surface.copy(alpha = 0.9f))
+            .background(PanopticoreColors.Surface)
     ) {
         // Tabs
         Row(modifier = Modifier.fillMaxWidth().height(50.dp)) {
@@ -191,7 +211,7 @@ fun TabItem(label: String, active: Boolean, modifier: Modifier, onClick: () -> U
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .background(if (active) PanopticoreColors.PrimaryGreen.copy(alpha = 0.1f) else Color.Transparent)
+            .background(if (active) Color(0xFF06231A) else Color.Transparent)
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {
@@ -260,7 +280,7 @@ fun TacticalButton(label: String, active: Boolean, modifier: Modifier, onClick: 
             .height(45.dp)
             .clickable { onClick() }
             .border(1.dp, if (active) PanopticoreColors.PrimaryGreen else Color.DarkGray),
-        color = if (active) PanopticoreColors.PrimaryGreen.copy(alpha = 0.1f) else Color.Transparent
+        color = if (active) Color(0xFF06231A) else Color.Transparent
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(

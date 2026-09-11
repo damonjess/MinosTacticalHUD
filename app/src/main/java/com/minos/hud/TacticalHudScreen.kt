@@ -83,7 +83,7 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(CyberSecPalette.TerminalBlack.copy(alpha = 0.4f))
+                .background(CyberSecPalette.TerminalBlack)
                 .padding(start = 16.dp, top = 28.dp, end = 16.dp, bottom = 8.dp)
         ) {
             Text(
@@ -102,21 +102,10 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
                 modifier = Modifier.padding(top = 2.dp)
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "FPS: ${viewModel.currentFps}",
-                    color = CyberSecPalette.CyberNetGreen,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
-                )
-                Spacer(modifier = Modifier.width(24.dp))
-                Text(
-                    text = "INF: ${viewModel.inferenceTimeMs}ms",
-                    color = CyberSecPalette.CyberNetGreen,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp
-                )
-            }
+            TacticalTelemetryRow(
+                fpsProvider = { viewModel.currentFps },
+                inferenceProvider = { viewModel.inferenceTimeMs }
+            )
         }
 
         // --- REALTIME TARGETING & OVERLAY CANVAS ---
@@ -142,7 +131,7 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
 
                 // Primary Vector Box
                 drawRect(
-                    color = greenMatrix.copy(alpha = 0.7f),
+                    color = greenMatrix,
                     topLeft = Offset(xMetricMin, yMetricMin),
                     size = Size(boxWidth, boxHeight),
                     style = Stroke(width = 2f)
@@ -221,5 +210,28 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
                 )
             }
         }
+    }
+}
+
+@Composable
+fun TacticalTelemetryRow(
+    fpsProvider: () -> Int,
+    inferenceProvider: () -> Int,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = "FPS: ${fpsProvider()}",
+            color = CyberSecPalette.CyberNetGreen,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
+        Spacer(modifier = Modifier.width(24.dp))
+        Text(
+            text = "INF: ${inferenceProvider()}ms",
+            color = CyberSecPalette.CyberNetGreen,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
     }
 }

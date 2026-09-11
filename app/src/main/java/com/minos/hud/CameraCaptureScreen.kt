@@ -135,7 +135,7 @@ fun CameraCaptureScreen(
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
                 .padding(top = 48.dp, start = 16.dp, end = 16.dp)
-                .background(Color(0xAA000000))
+                .background(Color(0xFF000000))
                 .padding(8.dp)
         ) {
             Text(
@@ -164,7 +164,7 @@ fun CameraCaptureScreen(
         ) {
             Button(
                 onClick = onCancel,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0x88CC0000))
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF880000))
             ) {
                 Text("ABORT", fontFamily = FontFamily.Monospace, color = Color.White)
             }

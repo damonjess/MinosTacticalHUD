@@ -23,8 +23,8 @@ fun SubCropTargetWindow(target: MagTrackTarget, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .width(140.dp)
-            .border(1.dp, Color(0xFF00FF66).copy(alpha = 0.6f))
-            .background(Color(0xCC050C14))
+            .border(1.dp, Color(0xFF00FF66))
+            .background(Color(0xFF050C14))
     ) {
         // Window Subheader Header
         Text(
@@ -36,7 +36,7 @@ fun SubCropTargetWindow(target: MagTrackTarget, modifier: Modifier = Modifier) {
         )
         
         // Cropped Target Matrix Box
-        Box(modifier = Modifier.fillMaxWidth().height(75.dp).border(1.dp, Color(0xFFFFA500).copy(alpha = 0.4f))) {
+        Box(modifier = Modifier.fillMaxWidth().height(75.dp).border(1.dp, Color(0xFFFFA500))) {
             AsyncImage(
                 model = target.crop, contentDescription = null,
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()
@@ -82,8 +82,8 @@ fun TerminalActionButton(text: String, active: Boolean, modifier: Modifier = Mod
     Box(
         modifier = modifier
             .height(50.dp)
-            .background(if (active) Color(0xFF06231A) else Color(0xFF333333).copy(alpha = 0.4f), CutCornerShape(2.dp))
-            .border(1.dp, if (active) Color(0xFF00FF66) else Color.Gray.copy(alpha = 0.4f), CutCornerShape(2.dp))
+            .background(if (active) Color(0xFF06231A) else Color(0xFF222222), CutCornerShape(2.dp))
+            .border(1.dp, if (active) Color(0xFF00FF66) else Color.DarkGray, CutCornerShape(2.dp))
             .clickable { onClick() },
         contentAlignment = Alignment.Center
     ) {

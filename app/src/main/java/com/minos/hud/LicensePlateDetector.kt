@@ -16,10 +16,26 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
     private var ortSession: OrtSession? = null
     private val modelInputSize = 640
 
+    // Pre-allocated reusable buffers to eliminate GC churn
+    private val resizedBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
+    private val resizedCanvas = Canvas(resizedBitmap)
+    private val filterPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val imgData = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
+    private val pixels = IntArray(modelInputSize * modelInputSize)
+
     init {
         try {
             val modelBytes = context.assets.open("license_plate_yolov5s.onnx").readBytes()
-            ortSession = ortEnv.createSession(modelBytes)
+            val options = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(4)
+                setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                try {
+                    addNnapi()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            ortSession = ortEnv.createSession(modelBytes, options)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -33,22 +49,19 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
         val scale = modelInputSize.toFloat() / maxOf(vehicleBitmap.width, vehicleBitmap.height)
         matrix.postScale(scale, scale)
         
-        val resizedBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(resizedBitmap)
-        canvas.drawColor(Color.DKGRAY)
-        canvas.drawBitmap(vehicleBitmap, matrix, Paint(Paint.FILTER_BITMAP_FLAG))
+        resizedCanvas.drawColor(Color.DKGRAY)
+        resizedCanvas.drawBitmap(vehicleBitmap, matrix, filterPaint)
 
-        val imgData = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
         imgData.rewind()
         
-        val pixels = IntArray(modelInputSize * modelInputSize)
         resizedBitmap.getPixels(pixels, 0, modelInputSize, 0, 0, modelInputSize, modelInputSize)
         
-        for (i in 0 until modelInputSize * modelInputSize) {
+        val totalPixels = modelInputSize * modelInputSize
+        for (i in 0 until totalPixels) {
             val clr = pixels[i]
             imgData.put(i, ((clr shr 16) and 0xFF) / 255.0f)
-            imgData.put(i + modelInputSize * modelInputSize, ((clr shr 8) and 0xFF) / 255.0f)
-            imgData.put(i + 2 * modelInputSize * modelInputSize, (clr and 0xFF) / 255.0f)
+            imgData.put(i + totalPixels, ((clr shr 8) and 0xFF) / 255.0f)
+            imgData.put(i + 2 * totalPixels, (clr and 0xFF) / 255.0f)
         }
         imgData.rewind()
 
@@ -119,8 +132,6 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
             results.close()
         } catch (e: Exception) {
             e.printStackTrace()
-        } finally {
-            resizedBitmap.recycle()
         }
         
         return bestResult
@@ -128,5 +139,8 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
 
     override fun close() {
         ortSession?.close()
+        if (!resizedBitmap.isRecycled) {
+            resizedBitmap.recycle()
+        }
     }
 }

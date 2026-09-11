@@ -1,11 +1,20 @@
 package com.minos.hud
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.AbsoluteRoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Place
@@ -21,8 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import android.Manifest
-import android.content.pm.PackageManager
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -35,13 +42,58 @@ fun TacticalMapScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val enrolledPeople = remember { EnrolledFaceStore.getAll(context) }
     
-    val hasLocationPermission = remember(context) {
-        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        hasLocationPermission = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
     }
 
     // Maintain a persistent programmatic reference to the raw MapView instance
     var mapViewInstance by remember { mutableStateOf<MapView?>(null) }
     var myLocationOverlayInstance by remember { mutableStateOf<MyLocationNewOverlay?>(null) }
+
+    // Request permissions on-the-fly when map screen is opened if not yet granted
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission) {
+            locationPermissionLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+            )
+        }
+    }
+
+    // Dynamically attach and activate location overlay when permission is granted
+    LaunchedEffect(hasLocationPermission, mapViewInstance) {
+        val map = mapViewInstance
+        if (hasLocationPermission && map != null && myLocationOverlayInstance == null) {
+            val locationProvider = GpsMyLocationProvider(context)
+            val myLocationOverlay = MyLocationNewOverlay(locationProvider, map).apply {
+                enableMyLocation()
+                isDrawAccuracyEnabled = true
+                runOnFirstFix {
+                    val fix = myLocation
+                    if (fix != null) {
+                        map.post {
+                            map.controller.animateTo(fix, 15.0, 1000L)
+                        }
+                    }
+                }
+            }
+            map.overlays.add(myLocationOverlay)
+            myLocationOverlayInstance = myLocationOverlay
+            map.invalidate()
+        }
+    }
 
     // Lifecycle management for the Map and Location Overlay
     DisposableEffect(mapViewInstance, myLocationOverlayInstance) {
@@ -78,23 +130,32 @@ fun TacticalMapScreen(onBack: () -> Unit) {
             // Tactical HUD "Locate Me" Button
             FloatingActionButton(
                 onClick = {
-                    val overlay = myLocationOverlayInstance
-                    val map = mapViewInstance
-                    if (overlay != null && map != null) {
-                        val myLocation = overlay.myLocation
-                        if (myLocation != null) {
-                            map.controller.animateTo(myLocation, 16.0, 800L)
-                        } else {
-                            // If no fix, ensure location is enabled and tell it to follow next fix
-                            overlay.enableMyLocation()
-                            overlay.enableFollowLocation()
-                            map.controller.setZoom(14.0)
+                    if (!hasLocationPermission) {
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    } else {
+                        val overlay = myLocationOverlayInstance
+                        val map = mapViewInstance
+                        if (overlay != null && map != null) {
+                            val myLocation = overlay.myLocation
+                            if (myLocation != null) {
+                                map.controller.animateTo(myLocation, 16.0, 800L)
+                            } else {
+                                // If no fix, ensure location is enabled and tell it to follow next fix
+                                overlay.enableMyLocation()
+                                overlay.enableFollowLocation()
+                                map.controller.setZoom(14.0)
+                            }
                         }
                     }
                 },
                 containerColor = Color(0xFF051A05),
                 contentColor = Color(0xFF00FF00),
-                shape = androidx.compose.foundation.shape.CircleShape,
+                shape = CircleShape,
                 modifier = Modifier.padding(bottom = 200.dp) // Offset above the bottom sheet
             ) {
                 Icon(Icons.Default.Place, contentDescription = "Locate Device Position")
@@ -137,31 +198,11 @@ fun TacticalMapScreen(onBack: () -> Unit) {
                             // Apply style filters to map canvas pipeline layers
                             overlayManager.tilesOverlay.setColorFilter(ColorMatrixColorFilter(inverseMatrix))
 
-                            // 2. LIVE LOCATION TRACKING LAYER CONFIGURATION
-                            if (hasLocationPermission) {
-                                val locationProvider = GpsMyLocationProvider(ctx)
-                                val myLocationOverlay = MyLocationNewOverlay(locationProvider, this).apply {
-                                    enableMyLocation()
-                                    isDrawAccuracyEnabled = true
-                                    // Automatically jump to first fix when the map screen is opened
-                                    runOnFirstFix {
-                                        val fix = myLocation
-                                        if (fix != null) {
-                                            post {
-                                                controller.animateTo(fix, 15.0, 1000L)
-                                            }
-                                        }
-                                    }
-                                }
-                                overlays.add(myLocationOverlay)
-                                myLocationOverlayInstance = myLocationOverlay
-                            }
-
                             // Base camera orientation default anchors
                             controller.setZoom(6.0)
                             controller.setCenter(GeoPoint(51.5074, -0.1278))
 
-                            // 3. TARGET BLIP NODES
+                            // TARGET BLIP NODES
                             enrolledPeople.forEachIndexed { index, person ->
                                 val seed = person.id.hashCode()
                                 val latOffset = ((seed xor (seed shr 16)) and 0xFFFF) / 65535f * 1.5 - 0.75
@@ -186,15 +227,28 @@ fun TacticalMapScreen(onBack: () -> Unit) {
 
                 if (!hasLocationPermission) {
                     Surface(
-                        color = Color.Black.copy(alpha = 0.7f),
-                        modifier = Modifier.align(Alignment.TopCenter).padding(16.dp)
+                        color = Color.Black.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, Color.Red),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(16.dp)
+                            .clickable {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            }
                     ) {
                         Text(
-                            "GPS PERMISSION DENIED // POSITIONING OFFLINE",
+                            "GPS PERMISSION DENIED // TAP TO ENABLE POSITIONING",
                             color = Color.Red,
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(8.dp)
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(12.dp)
                         )
                     }
                 }
@@ -206,7 +260,7 @@ fun TacticalMapScreen(onBack: () -> Unit) {
                     .fillMaxWidth()
                     .height(200.dp),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF051605)),
-                shape = androidx.compose.foundation.shape.AbsoluteRoundedCornerShape(0.dp)
+                shape = AbsoluteRoundedCornerShape(0.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(

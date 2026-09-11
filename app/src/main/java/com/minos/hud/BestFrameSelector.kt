@@ -26,11 +26,18 @@ object BestFrameSelector {
         var count = 0
         
         try {
-            for (y in top until bottom step step) {
+            val pixels = IntArray(targetWidth * targetHeight)
+            bitmap.getPixels(pixels, 0, targetWidth, left, top, targetWidth, targetHeight)
+
+            for (y in 0 until targetHeight step step) {
                 var prevLum = -1
-                for (x in left until right step step) {
-                    val pixel = bitmap.getPixel(x, y)
-                    val lum = (Color.red(pixel) * 0.299f + Color.green(pixel) * 0.587f + Color.blue(pixel) * 0.114f).toInt()
+                val rowOffset = y * targetWidth
+                for (x in 0 until targetWidth step step) {
+                    val pixel = pixels[rowOffset + x]
+                    val red = (pixel shr 16) and 0xFF
+                    val green = (pixel shr 8) and 0xFF
+                    val blue = pixel and 0xFF
+                    val lum = (red * 0.299f + green * 0.587f + blue * 0.114f).toInt()
                     
                     if (prevLum != -1) {
                         detailSum += abs(lum - prevLum)

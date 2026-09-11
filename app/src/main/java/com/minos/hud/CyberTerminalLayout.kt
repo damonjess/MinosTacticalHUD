@@ -71,32 +71,10 @@ fun FixedCyberTerminalScreen(viewModel: CyberSecViewModel = androidx.lifecycle.v
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 // Row 3: Performance Telemetry (Grid Alignment)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    // FPS Block with predefined minimum horizontal constraint
-                    Column(modifier = Modifier.width(100.dp)) {
-                        Text(
-                            text = "FPS: ${viewModel.currentFps}",
-                            color = Color(0xFF00FF66).copy(alpha = 0.8f),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    
-                    // Inference Block completely isolated horizontally
-                    Column {
-                        Text(
-                            text = "INF: ${viewModel.inferenceTimeMs}ms",
-                            color = Color(0xFF00FF66).copy(alpha = 0.8f),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
+                CyberTelemetryRow(
+                    fpsProvider = { viewModel.currentFps },
+                    inferenceProvider = { viewModel.inferenceTimeMs }
+                )
             }
 
             // --- INTERCEPTOR VECTOR HUD OVERLAYS ---
@@ -107,7 +85,7 @@ fun FixedCyberTerminalScreen(viewModel: CyberSecViewModel = androidx.lifecycle.v
                 val alertCyan = Color(0xFF00E5FF)
 
                 // Perfect Crosshair Center Lock Ring
-                drawCircle(color = matrixGreen.copy(alpha = 0.2f), radius = h * 0.3f, center = center, style = Stroke(1.5f))
+                drawCircle(color = matrixGreen, radius = h * 0.3f, center = center, style = Stroke(1.5f))
                 drawCircle(color = alertCyan, radius = 10f, center = center, style = Stroke(2f))
 
                 // Tactical Scoping Corner Notches
@@ -220,5 +198,36 @@ fun TerminalButtonFrame(text: String, active: Boolean, modifier: Modifier = Modi
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             lineHeight = 13.sp
         )
+    }
+}
+
+@Composable
+fun CyberTelemetryRow(
+    fpsProvider: () -> Int,
+    inferenceProvider: () -> Int,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Column(modifier = Modifier.width(100.dp)) {
+            Text(
+                text = "FPS: ${fpsProvider()}",
+                color = Color(0xFF00FF66),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Column {
+            Text(
+                text = "INF: ${inferenceProvider()}ms",
+                color = Color(0xFF00FF66),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
     }
 }

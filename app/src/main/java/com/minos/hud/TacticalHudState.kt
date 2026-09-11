@@ -14,7 +14,13 @@ data class MagTrackTarget(
     val coordinateLabel: String,
     val relX: Float,
     val relY: Float,
-    val crop: Bitmap? = null
+    val crop: Bitmap? = null,
+    val xMin: Float = relX - 0.05f,
+    val yMin: Float = relY - 0.05f,
+    val xMax: Float = relX + 0.05f,
+    val yMax: Float = relY + 0.05f,
+    val vx: Float = 0f,
+    val vy: Float = 0f
 )
 
 data class YoloTarget(

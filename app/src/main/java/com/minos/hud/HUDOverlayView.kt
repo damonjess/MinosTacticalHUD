@@ -45,7 +45,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     private val textBgPaint = Paint().apply {
-        color = Color.parseColor("#CC03090F")
+        color = Color.parseColor("#FF03090F")
         style = Paint.Style.FILL
         isAntiAlias = true
     }
@@ -134,7 +134,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     "TRACK-03" -> PointF(vWidth * 0.15f, vHeight * 0.85f)
                     else -> PointF(vWidth * 0.85f, vHeight * 0.85f)
                 }
-                tetherPaint.alpha = 140
+                tetherPaint.alpha = 255
                 canvas.drawLine(anchor.x, anchor.y, pixelX, pixelY, tetherPaint)
             }
         }
