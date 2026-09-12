@@ -57,7 +57,7 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
                             it.setAnalyzer(cameraExecutor, YoloAnalyzer(ctx) { realBoxes, inferenceTime ->
                                 // Instantly feed physical object parameters to our custom overlay states
                                 viewModel.detectedObjects = realBoxes.filter { box ->
-                                    box.confidence >= (viewModel.motionSensitivity / 100f)
+                                    box.confidence >= viewModel.motionSensitivity
                                 }
                                 viewModel.inferenceTimeMs = inferenceTime.toInt()
                             })

@@ -56,12 +56,13 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         strokeWidth = 2f
         style = Paint.Style.STROKE
         isAntiAlias = true
+        alpha = 75
     }
 
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
     var isYoloBoxesEnabled: Boolean = true
-    var sensitivityThreshold: Float = 0.25f
+    var sensitivityThreshold: Float = 0.45f
 
     private var camSourceWidth = 720f
     private var camSourceHeight = 1280f
@@ -115,10 +116,12 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     val labelText = "${target.label} [${(target.confidence * 100).toInt()}%]"
                     textPaint.color = paintToUse.color
                     val textWidth = textPaint.measureText(labelText)
-                    val labelTop = max(30f, top - 10f)
-                    
-                    canvas.drawRect(left, labelTop - 32f, left + textWidth + 16f, labelTop + 6f, textBgPaint)
-                    canvas.drawText(labelText, left + 8f, labelTop - 6f, textPaint)
+                    val minMarginX = 12f
+                    val labelLeft = left.coerceIn(minMarginX, max(minMarginX, vWidth - textWidth - 16f))
+                    val labelTop = max(36f, top - 10f)
+
+                    canvas.drawRect(labelLeft - 4f, labelTop - 32f, labelLeft + textWidth + 12f, labelTop + 6f, textBgPaint)
+                    canvas.drawText(labelText, labelLeft + 4f, labelTop - 6f, textPaint)
                 }
             }
         }
@@ -136,7 +139,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     "TRACK-03" -> PointF(vWidth * 0.15f, vHeight * 0.85f)
                     else -> PointF(vWidth * 0.85f, vHeight * 0.85f)
                 }
-                tetherPaint.alpha = 255
+                tetherPaint.alpha = 75
                 canvas.drawLine(anchor.x, anchor.y, pixelX, pixelY, tetherPaint)
             }
         }

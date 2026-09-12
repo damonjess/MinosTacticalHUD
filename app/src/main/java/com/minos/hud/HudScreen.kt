@@ -277,9 +277,10 @@ fun CaptureHUD(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
                     modifier = Modifier.weight(1f).height(50.dp),
                     shape = RoundedCornerShape(25.dp),
-                    border = BorderStroke(1.dp, Color.Gray)
+                    border = BorderStroke(1.dp, Color.Gray),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                 ) {
-                    Text("LOGS (${EventRepository.events.size})", color = Color.White, fontSize = 15.sp)
+                    Text("LOGS ${EventRepository.events.size}", color = Color.White, fontSize = 13.sp, maxLines = 1, fontFamily = FontFamily.Monospace)
                 }
             }
         }

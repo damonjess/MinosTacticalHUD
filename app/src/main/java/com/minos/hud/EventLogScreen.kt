@@ -25,11 +25,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import java.io.File
 
 @Composable
 fun EventLogScreen(onBack: () -> Unit) {
@@ -51,50 +51,51 @@ fun EventLogScreen(onBack: () -> Unit) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 16.dp, top = 40.dp, bottom = 12.dp),
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
                     tint = Color(0xFF00FF9D),
-                    modifier = Modifier.size(32.dp).clickable { onBack() }
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clickable { onBack() }
                 )
-                Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = "EVENT LOG",
-                    color = Color(0xFF00FF9D),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "•",
-                    color = Color(0xFF00FF9D),
-                    modifier = Modifier.padding(horizontal = 6.dp)
-                )
-                Text(
-                    text = "${events.size}",
-                    color = Color(0xFF00FF9D),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Button(
-                    onClick = { EventRepository.deleteAll(context) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421515)),
-                    shape = RoundedCornerShape(20.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "EVENT LOG",
+                        color = Color(0xFF00FF9D),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+
+                    Text(
+                        text = "${events.size} RECORDS",
+                        color = Color(0xFF00A8FF),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                TextButton(
+                    onClick = { EventRepository.deleteAll(context) }
                 ) {
-                    Text("DELETE ALL", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = "CLEAR",
+                        color = Color(0xFFFF7777),
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
 
             // Tabs
             Row(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                LogTab("PEOPLE + VEHIC (${events.count { it.category == EventCategory.PEOPLE_VEHICLES }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
+                LogTab("PEOPLE (${events.count { it.category == EventCategory.PEOPLE_VEHICLES }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
                 LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
                 LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
             }
@@ -145,8 +146,11 @@ fun LogTab(text: String, active: Boolean, modifier: Modifier, onClick: () -> Uni
     ) {
         Text(
             text = text,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             color = if (active) Color(0xFF00FF9D) else Color.Gray,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold
         )
@@ -173,77 +177,114 @@ fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(vertical = 5.dp)
             .clickable { onClick() },
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF05101A)),
-        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF05101A)
+        ),
+        shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, Color(0xFF102A3E))
     ) {
-        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(110.dp, 80.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color.Black)
-                    .border(1.dp, Color(0xFF00FF9D).copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
             ) {
-                bitmap?.let {
-                    Image(
-                        bitmap = it.asImageBitmap(),
-                        contentDescription = "Event Thumbnail",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
+                Box(
+                    modifier = Modifier
+                        .size(100.dp, 76.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Black)
+                        .border(
+                            1.dp,
+                            Color(0xFF00FF9D).copy(alpha = 0.45f),
+                            RoundedCornerShape(6.dp)
+                        )
+                ) {
+                    bitmap?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = "Event thumbnail",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = event.label,
-                    color = Color(0xFF00FF9D),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = event.timestamp,
-                    color = Color.LightGray,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = event.label,
+                        color = Color(0xFF00FF9D),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Text(
+                        text = event.timestamp,
+                        color = Color.LightGray,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+
                     Text(
                         text = when (event.category) {
-                            EventCategory.PEOPLE_VEHICLES -> "VEHICLE/PERSON"
+                            EventCategory.PEOPLE_VEHICLES -> "VEHICLE / PERSON"
                             EventCategory.ANIMALS -> "ANIMAL"
                             EventCategory.PLATES -> "LICENSE PLATE"
                         },
                         color = Color(0xFF00A8FF),
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(text = " • ", color = Color.Gray)
-                    Text(
-                        text = "VIEW FULL",
-                        color = Color(0xFF00FF9D),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            Button(
-                onClick = onDelete,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF421515)),
-                shape = RoundedCornerShape(16.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                modifier = Modifier.height(34.dp)
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("DELETE", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "VIEW FULL",
+                    color = Color(0xFF00FF9D),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+
+                Button(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF421515)
+                    ),
+                    shape = RoundedCornerShape(18.dp),
+                    contentPadding = PaddingValues(
+                        horizontal = 16.dp,
+                        vertical = 5.dp
+                    ),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text(
+                        text = "DELETE",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
     }

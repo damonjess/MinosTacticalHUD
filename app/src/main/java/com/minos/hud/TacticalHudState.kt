@@ -45,7 +45,7 @@ data class DynamicYoloBox(
 
 class TacticalHudViewModel : ViewModel() {
     var digitalZoom by mutableStateOf(8f)
-    var motionSensitivity by mutableStateOf(36f)
+    var motionSensitivity by mutableStateOf(0.45f)
     var activePanel by mutableStateOf("GEOLOG")
     var currentFps by mutableStateOf(0)
     var inferenceTimeMs by mutableStateOf(0)
