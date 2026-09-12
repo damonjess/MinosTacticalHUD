@@ -3,6 +3,7 @@ package com.minos.hud
 import ai.onnxruntime.*
 import android.content.Context
 import android.graphics.*
+import android.util.Log
 import java.nio.FloatBuffer
 import java.util.*
 
@@ -26,17 +27,25 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
     init {
         try {
             val modelBytes = context.assets.open("license_plate_yolov5s.onnx").readBytes()
-            val options = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(4)
-                setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                try {
+            try {
+                val nnapiOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
                     addNnapi()
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
+                ortSession = ortEnv.createSession(modelBytes, nnapiOptions)
+                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with NNAPI execution provider.")
+            } catch (e: Exception) {
+                Log.w("LicensePlateDetector", "NNAPI initialization failed for license_plate_yolov5s.onnx (${e.message}). Falling back to CPU execution.", e)
+                val cpuOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                }
+                ortSession = ortEnv.createSession(modelBytes, cpuOptions)
+                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with CPU execution provider.")
             }
-            ortSession = ortEnv.createSession(modelBytes, options)
         } catch (e: Exception) {
+            Log.e("LicensePlateDetector", "Failed to load license_plate_yolov5s.onnx", e)
             e.printStackTrace()
         }
     }
@@ -45,11 +54,20 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
         val session = ortSession ?: return null
         if (vehicleBitmap.isRecycled || vehicleBitmap.width < 100 || vehicleBitmap.height < 60) return null
 
-        val matrix = Matrix()
-        val scale = modelInputSize.toFloat() / maxOf(vehicleBitmap.width, vehicleBitmap.height)
-        matrix.postScale(scale, scale)
+        val srcW = vehicleBitmap.width.toFloat()
+        val srcH = vehicleBitmap.height.toFloat()
+        val scale = minOf(modelInputSize / srcW, modelInputSize / srcH)
+        val dstW = srcW * scale
+        val dstH = srcH * scale
+        val padX = (modelInputSize - dstW) / 2f
+        val padY = (modelInputSize - dstH) / 2f
+
+        val matrix = Matrix().apply {
+            postScale(scale, scale)
+            postTranslate(padX, padY)
+        }
         
-        resizedCanvas.drawColor(Color.DKGRAY)
+        resizedCanvas.drawColor(Color.BLACK)
         resizedCanvas.drawBitmap(vehicleBitmap, matrix, filterPaint)
 
         imgData.rewind()
@@ -85,10 +103,10 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
                 val confidence = objConf * clsConf
 
                 if (confidence > maxConf) {
-                    val cx = buffer.get(offset + 0) / (scale * vehicleBitmap.width)
-                    val cy = buffer.get(offset + 1) / (scale * vehicleBitmap.height)
-                    val w = buffer.get(offset + 2) / (scale * vehicleBitmap.width)
-                    val h = buffer.get(offset + 3) / (scale * vehicleBitmap.height)
+                    val cx = (buffer.get(offset + 0) - padX) / (scale * srcW)
+                    val cy = (buffer.get(offset + 1) - padY) / (scale * srcH)
+                    val w = buffer.get(offset + 2) / (scale * srcW)
+                    val h = buffer.get(offset + 3) / (scale * srcH)
                     
                     val aspectRatio = w / maxOf(0.01f, h)
                     // Plausible plate aspect ratios

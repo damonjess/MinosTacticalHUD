@@ -31,6 +31,7 @@ class MainViewModel : ViewModel() {
     var currentProfile by mutableStateOf("OUTDOOR")
     var exposureValue by mutableFloatStateOf(0f)
     var isTorchEnabled by mutableStateOf(false)
+    var modelLoadError by mutableStateOf<String?>(null)
 
     val trackedTargets = mutableStateListOf<MagTrackTarget>()
 

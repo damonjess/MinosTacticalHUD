@@ -3,6 +3,7 @@ package com.minos.hud
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import kotlin.math.max
 
@@ -71,8 +72,9 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     fun updateTargets(newTargets: List<YoloTarget>) {
+        Log.d("HUDOverlayView", "Received targets=${newTargets.size}")
         targets = newTargets
-        postInvalidate()
+        postInvalidateOnAnimation()
     }
 
     override fun onDraw(canvas: Canvas) {

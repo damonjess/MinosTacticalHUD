@@ -157,9 +157,16 @@ fun CaptureHUD(
             }
         }
 
+        val statusText = if (viewModel.modelLoadError != null) {
+            "MODEL ERROR: ${viewModel.modelLoadError}"
+        } else {
+            "LIVE  •  ${viewModel.trackedTargets.size} TARGETS  •  ${if (viewModel.isScanning) "Scanning" else "Paused"}"
+        }
+        val statusColor = if (viewModel.modelLoadError != null) Color(0xFFFF3333) else Color(0xFF00A8FF)
+
         Text(
-            text = "LIVE  •  ${viewModel.trackedTargets.size} TARGETS  •  ${if (viewModel.isScanning) "Scanning" else "Paused"}",
-            color = Color(0xFF00A8FF),
+            text = statusText,
+            color = statusColor,
             fontSize = 14.sp,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.padding(horizontal = 16.dp)

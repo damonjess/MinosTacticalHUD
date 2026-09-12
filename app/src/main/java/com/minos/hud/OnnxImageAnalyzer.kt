@@ -11,6 +11,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
@@ -32,7 +33,8 @@ class OnnxImageAnalyzer(
     private val setDigitalZoom: (Float) -> Unit,
     private val getIsCaptureOn: () -> Boolean,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
-    private val onFpsUpdated: (fps: Int) -> Unit
+    private val onFpsUpdated: (fps: Int) -> Unit,
+    private val onModelLoadError: ((String) -> Unit)? = null
 ) : ImageAnalysis.Analyzer, AutoCloseable {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -71,30 +73,43 @@ class OnnxImageAnalyzer(
         "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
     )
 
+    private var modelLoadError: String? = null
+
     init {
         try {
             licensePlateDetector = LicensePlateDetector(context)
         } catch (e: Exception) {
+            Log.e("OnnxImageAnalyzer", "Failed to init LicensePlateDetector", e)
             e.printStackTrace()
         }
 
         try {
             val env = ortEnv
             if (env != null) {
-                val options = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(4)
-                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                    try {
+                val modelBytes = context.assets.open(modelName).use { it.readBytes() }
+                
+                try {
+                    val nnapiOptions = OrtSession.SessionOptions().apply {
+                        setIntraOpNumThreads(4)
+                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
                         addNnapi()
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
-                }
-                context.assets.open(modelName).use { input ->
-                    ortSession = env.createSession(input.readBytes(), options)
+                    ortSession = env.createSession(modelBytes, nnapiOptions)
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with NNAPI execution provider.")
+                } catch (e: Exception) {
+                    Log.w("OnnxImageAnalyzer", "NNAPI initialization failed for $modelName (${e.message}). Falling back to CPU execution.", e)
+                    val cpuOptions = OrtSession.SessionOptions().apply {
+                        setIntraOpNumThreads(4)
+                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                    }
+                    ortSession = env.createSession(modelBytes, cpuOptions)
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with CPU execution provider.")
                 }
             }
         } catch (e: Exception) {
+            modelLoadError = "Failed to load $modelName: ${e.message}"
+            Log.e("OnnxImageAnalyzer", modelLoadError!!, e)
+            onModelLoadError?.invoke(modelLoadError!!)
             e.printStackTrace()
         }
     }
@@ -145,10 +160,14 @@ class OnnxImageAnalyzer(
             }
 
             val inputTensor = OnnxTensor.createTensor(env, tensorBuffer, longArrayOf(1, 3, modelInputSize.toLong(), modelInputSize.toLong()))
-            val inputs = mapOf("images" to inputTensor)
+            val inputName = session.inputNames.iterator().next()
+            val inputs = mapOf(inputName to inputTensor)
             val outputs = session.run(inputs)
 
             if (outputs != null) {
+                val outputTensor = outputs.get(0) as OnnxTensor
+                Log.d("OnnxImageAnalyzer", "Output shape=${outputTensor.info.shape.contentToString()}")
+
                 val sensitivity = getSensitivityThreshold()
                 val maxDet = getMaxDetections()
                 val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
@@ -169,6 +188,10 @@ class OnnxImageAnalyzer(
             }
             inputTensor.close()
         } catch (e: Exception) {
+            Log.e("OnnxImageAnalyzer", "Inference failed", e)
+            mainHandler.post {
+                onModelLoadError?.invoke("Inference failed: ${e.message}")
+            }
             e.printStackTrace()
         } finally {
             rotatedBitmap.recycle()
@@ -275,7 +298,7 @@ class OnnxImageAnalyzer(
         }
 
         val nmsSelected = nms(candidateTargets)
-        return nmsSelected.take(maxDetections).map { target ->
+        val finalTargets = nmsSelected.take(maxDetections).map { target ->
             val left = (target.xMin * sourceBitmap.width)
             val top = (target.yMin * sourceBitmap.height)
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
@@ -305,6 +328,12 @@ class OnnxImageAnalyzer(
                 crop = crop
             )
         }
+
+        Log.d("OnnxImageAnalyzer", "Raw candidates=${candidateTargets.size}")
+        Log.d("OnnxImageAnalyzer", "NMS results=${nmsSelected.size}")
+        Log.d("OnnxImageAnalyzer", "Final targets=${finalTargets.size}")
+
+        return finalTargets
     }
 
     private fun calculateIou(

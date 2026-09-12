@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.preference.PreferenceManager
+import android.util.Log
 import android.util.Size
 import android.view.View
 import android.view.WindowManager
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
             },
             getIsCaptureOn = { viewModel.isCaptureOn },
             onTargetsDetected = { magTargets, yoloTargets, inferenceTimeMs, rotatedWidth, rotatedHeight ->
+                Log.d("MainActivity", "Overlay targets=${yoloTargets.size}")
                 viewModel.updateTrackedTargets(magTargets)
                 viewModel.inferenceValue = inferenceTimeMs
                 hudOverlay?.setCameraSourceDimensions(rotatedWidth, rotatedHeight)
@@ -74,6 +76,9 @@ class MainActivity : ComponentActivity() {
             },
             onFpsUpdated = { fps ->
                 viewModel.fpsValue = fps
+            },
+            onModelLoadError = { error ->
+                viewModel.modelLoadError = error
             }
         )
 
