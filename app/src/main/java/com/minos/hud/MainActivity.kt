@@ -166,6 +166,7 @@ class MainActivity : ComponentActivity() {
             }
 
             val cameraImageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build().also {
                     it.setAnalyzer(cameraExecutor, analyzer)

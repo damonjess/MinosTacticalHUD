@@ -59,7 +59,7 @@ fun CameraCaptureScreen(
 
                     // Configure resolution processing pipelines optimized for ML Kit targets
                     val imageAnalysis = ImageAnalysis.Builder()
-                        .setTargetResolution(Size(720, 1280))
+                        .setTargetResolution(Size(1080, 1920))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
 

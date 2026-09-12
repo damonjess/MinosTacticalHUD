@@ -50,6 +50,7 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
 
                     // Setup real-time Image Analyzer loop
                     val imageAnalyzer = ImageAnalysis.Builder()
+                        .setTargetResolution(android.util.Size(1920, 1080))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                         .also {
