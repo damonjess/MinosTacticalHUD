@@ -70,11 +70,12 @@ object EventRepository {
         }
         if (thumbBitmap != bitmap) thumbBitmap.recycle()
 
-        // Save full image — use the full camera frame if available for maximum quality,
-        // otherwise fall back to the detection crop
-        val fullBitmap = fullFrame ?: bitmap
+        // Save the expanded event image as the original detection crop so VIEW FULL
+        // stays zoomed in on the detected subject instead of showing the wide frame.
+        // (The wide fullFrame is intentionally not used here — the event viewer should
+        // keep the same zoomed-in framing as the thumbnail.)
         FileOutputStream(fullFile).use { out ->
-            fullBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
         }
 
         val metadataFile = File(eventDir, "$id.metadata")
