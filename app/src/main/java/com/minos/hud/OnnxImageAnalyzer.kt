@@ -172,7 +172,7 @@ class OnnxImageAnalyzer(
                 val maxDet = getMaxDetections()
                 val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
 
-                val plateTargets = updateMagTrackTargets(targets)
+                val plateTargets = updateMagTrackTargets(targets, rotatedBitmap)
                 targets.addAll(plateTargets)
 
                 val inferenceTime = System.currentTimeMillis() - startTime
@@ -376,7 +376,7 @@ class OnnxImageAnalyzer(
         }
     }
 
-    private fun updateMagTrackTargets(targets: List<YoloTarget>): List<YoloTarget> {
+    private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap): List<YoloTarget> {
         if (getAutoMag() && targets.isNotEmpty()) {
             val bestTarget = targets.maxByOrNull { it.confidence }
             if (bestTarget != null && bestTarget.confidence > 0.7f && getDigitalZoom() < 2f) {
@@ -563,7 +563,7 @@ class OnnxImageAnalyzer(
                 if (category != null) {
                     track.crop?.let { bitmap ->
                         val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
-                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score)
+                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score, fullFrame)
                     }
                 }
             }
@@ -574,7 +574,7 @@ class OnnxImageAnalyzer(
                     val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
                     // Generate a deterministic ID for the plate based on its parent vehicle bounds to group captures
                     val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
-                    captureManager.processDetection(plateId, "LICENSE PLATE", EventCategory.PLATES, bitmap, score)
+                    captureManager.processDetection(plateId, "LICENSE PLATE", EventCategory.PLATES, bitmap, score, fullFrame)
                 }
             }
         }

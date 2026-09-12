@@ -48,7 +48,8 @@ object EventRepository {
         context: Context,
         label: String,
         category: EventCategory,
-        bitmap: Bitmap
+        bitmap: Bitmap,
+        fullFrame: Bitmap? = null
     ) {
         val eventDir = File(context.filesDir, "events")
         if (!eventDir.exists()) eventDir.mkdirs()
@@ -69,9 +70,11 @@ object EventRepository {
         }
         if (thumbBitmap != bitmap) thumbBitmap.recycle()
 
-        // Save full image at maximum quality
+        // Save full image — use the full camera frame if available for maximum quality,
+        // otherwise fall back to the detection crop
+        val fullBitmap = fullFrame ?: bitmap
         FileOutputStream(fullFile).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            fullBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
         }
 
         val metadataFile = File(eventDir, "$id.metadata")

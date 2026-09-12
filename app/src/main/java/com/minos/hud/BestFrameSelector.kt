@@ -70,10 +70,11 @@ class CaptureManager(private val context: android.content.Context) {
         var frameCount: Int,
         val firstSeen: Long,
         val label: String,
-        val category: EventCategory
+        val category: EventCategory,
+        val fullFrame: Bitmap? = null
     )
 
-    fun processDetection(id: String, label: String, category: EventCategory, bitmap: Bitmap, score: Float) {
+    fun processDetection(id: String, label: String, category: EventCategory, bitmap: Bitmap, score: Float, fullFrame: Bitmap? = null) {
         val now = System.currentTimeMillis()
         
         // Cooldown check
@@ -84,20 +85,23 @@ class CaptureManager(private val context: android.content.Context) {
         
         if (current == null) {
             val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
-            pendingCaptures[id] = BestFrame(copy, score, 1, now, label, category)
+            val fullCopy = try { fullFrame?.copy(config, false) } catch (e: Exception) { null }
+            pendingCaptures[id] = BestFrame(copy, score, 1, now, label, category, fullCopy)
         } else {
             current.frameCount++
             // If the new frame is sharper/better quality, replace the stored one
             if (score > current.score) {
                 val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
-                current.bitmap.recycle() // Clean up old memory
-                pendingCaptures[id] = current.copy(bitmap = copy, score = score, frameCount = current.frameCount)
+                val fullCopy = try { fullFrame?.copy(config, false) } catch (e: Exception) { null }
+                current.fullFrame?.recycle()
+                current.bitmap.recycle()
+                pendingCaptures[id] = current.copy(bitmap = copy, score = score, frameCount = current.frameCount, fullFrame = fullCopy)
             }
             
             // Commit capture to storage after observing the target for a brief window to ensure a good shot
             if (current.frameCount >= 5 || now - current.firstSeen > 600) {
                 val best = pendingCaptures.remove(id) ?: return
-                EventRepository.saveEvent(context, best.label, best.category, best.bitmap)
+                EventRepository.saveEvent(context, best.label, best.category, best.bitmap, best.fullFrame)
                 capturedIds[id] = now
             }
         }

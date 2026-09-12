@@ -6,6 +6,7 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.View
 import kotlin.math.max
+import kotlin.math.min
 
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
@@ -67,7 +68,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private var camSourceWidth = 720f
     private var camSourceHeight = 1280f
 
-    // --- Velocity prediction & temporal smoothing state ---
+    // --- Temporal smoothing state ---
     private var lastUpdateTimeMs: Long = System.currentTimeMillis()
     private var isAnimating = false
 
@@ -82,10 +83,15 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     private val smoothedTracks = mutableListOf<SmoothedTrack>()
     private val maxTracks = 15
-    private val smoothingAlpha = 0.35f   // EMA position factor (higher = more responsive to new detection)
-    private val velocityAlpha = 0.2f    // EMA velocity factor (lower = smoother velocity)
-    private val maxMissedFrames = 3     // Keep predicting a track for this many frames after it disappears
-    private val matchDistanceThreshold = 0.15f  // Max squared center distance to match targets (normalized)
+
+    // Conservative prediction parameters — tuned to prevent drift
+    private val smoothingAlpha = 0.3f       // EMA position factor (lower = more stable)
+    private val velocityAlpha = 0.12f       // EMA velocity factor (lower = smoother velocity)
+    private val maxPredictionTime = 0.06f   // Cap prediction at 60ms to prevent drift
+    private val maxVelocity = 1.0f          // Max normalized velocity per second
+    private val velocityDecay = 0.85f       // Velocity decays toward zero without new detections
+    private val maxMissedFrames = 1         // Remove track after 1 missed frame
+    private val matchDistanceThreshold = 0.12f  // Max squared center distance to match
 
     fun setCameraSourceDimensions(width: Int, height: Int) {
         camSourceWidth = width.toFloat()
@@ -94,9 +100,9 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     fun updateTargets(newTargets: List<YoloTarget>) {
         val now = System.currentTimeMillis()
-        val dt = maxOf(1f, (now - lastUpdateTimeMs) / 1000.0f) // seconds since last update
+        val dt = maxOf(0.001f, (now - lastUpdateTimeMs) / 1000.0f)
 
-        // Match new detections to existing smoothed tracks by proximity (using predicted centers)
+        // Match new detections to existing smoothed tracks by proximity
         val matched = BooleanArray(newTargets.size) { false }
         val updatedTracks = mutableListOf<SmoothedTrack>()
 
@@ -129,8 +135,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 val tcy = (t.yMin + t.yMax) / 2f
                 val ecx = (existing.xMin + existing.xMax) / 2f
                 val ecy = (existing.yMin + existing.yMax) / 2f
-                val newVx = (tcx - ecx) / dt
-                val newVy = (tcy - ecy) / dt
+                val newVx = ((tcx - ecx) / dt).coerceIn(-maxVelocity, maxVelocity)
+                val newVy = ((tcy - ecy) / dt).coerceIn(-maxVelocity, maxVelocity)
 
                 // EMA smoothing — blends old smoothed position with new detection
                 existing.xMin = existing.xMin * (1 - smoothingAlpha) + t.xMin * smoothingAlpha
@@ -147,7 +153,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
                 updatedTracks.add(existing)
             } else {
-                // Track not matched this frame — keep predicting with velocity
+                // Track not matched — keep for 1 more frame with decaying velocity
                 existing.missedCount++
                 if (existing.missedCount <= maxMissedFrames) {
                     updatedTracks.add(existing)
@@ -171,7 +177,6 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         targets = newTargets
         lastUpdateTimeMs = now
 
-        // Start or stop continuous animation
         if (smoothedTracks.isNotEmpty() && !isAnimating) {
             isAnimating = true
             postInvalidateOnAnimation()
@@ -185,7 +190,17 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         super.onDraw(canvas)
 
         val now = System.currentTimeMillis()
-        val elapsed = (now - lastUpdateTimeMs) / 1000.0f // seconds since last detection
+        // Cap prediction time to prevent drift — only predict up to 60ms ahead
+        val rawElapsed = (now - lastUpdateTimeMs) / 1000.0f
+        val elapsed = min(rawElapsed, maxPredictionTime)
+
+        // Apply velocity decay when no new detection has arrived
+        if (rawElapsed > 0.03f) {
+            for (track in smoothedTracks) {
+                track.vx *= velocityDecay
+                track.vy *= velocityDecay
+            }
+        }
 
         val vWidth = width.toFloat()
         val vHeight = height.toFloat()
@@ -200,7 +215,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         if (isYoloBoxesEnabled) {
             for (track in smoothedTracks) {
                 if (track.confidence >= sensitivityThreshold) {
-                    // Predict current position using velocity and elapsed time since last detection
+                    // Predict current position using velocity and capped elapsed time
                     val predXMin = (track.xMin + track.vx * elapsed).coerceIn(0f, 1f)
                     val predYMin = (track.yMin + track.vy * elapsed).coerceIn(0f, 1f)
                     val predXMax = (track.xMax + track.vx * elapsed).coerceIn(0f, 1f)
@@ -238,7 +253,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             }
         }
 
-        // Draw mag track targets (circles + tethers) with velocity prediction
+        // Draw mag track targets (circles + tethers) with conservative velocity prediction
         if (isYoloBoxesEnabled) {
             magTrackTargets.forEach { target ->
                 val predX = (target.relX + target.vx * elapsed).coerceIn(0f, 1f)
