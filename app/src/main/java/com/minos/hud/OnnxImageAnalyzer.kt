@@ -304,8 +304,8 @@ class OnnxImageAnalyzer(
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
             val h = ((target.yMax - target.yMin) * sourceBitmap.height)
 
-            val padX = w * 0.4f
-            val padY = h * 0.4f
+            val padX = w * 0.2f
+            val padY = h * 0.2f
 
             val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
             val paddedTop = (top - padY).toInt().coerceAtLeast(0)
@@ -426,16 +426,25 @@ class OnnxImageAnalyzer(
                 val newVx = 0.6f * (targetCenterX - matchedTrack.relX) + 0.4f * matchedTrack.vx
                 val newVy = 0.6f * (targetCenterY - matchedTrack.relY) + 0.4f * matchedTrack.vy
 
+                // EMA smoothing — blend previous tracked position with new detection to reduce jitter
+                val smoothAlpha = 0.4f
+                val smoothXMin = matchedTrack.xMin * (1 - smoothAlpha) + matchedTarget.xMin * smoothAlpha
+                val smoothYMin = matchedTrack.yMin * (1 - smoothAlpha) + matchedTarget.yMin * smoothAlpha
+                val smoothXMax = matchedTrack.xMax * (1 - smoothAlpha) + matchedTarget.xMax * smoothAlpha
+                val smoothYMax = matchedTrack.yMax * (1 - smoothAlpha) + matchedTarget.yMax * smoothAlpha
+                val smoothRelX = matchedTrack.relX * (1 - smoothAlpha) + targetCenterX * smoothAlpha
+                val smoothRelY = matchedTrack.relY * (1 - smoothAlpha) + targetCenterY * smoothAlpha
+
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
-                    relX = targetCenterX,
-                    relY = targetCenterY,
-                    coordinateLabel = "X:${(matchedTarget.xMin * 100).toInt()} Y:${(matchedTarget.yMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
+                    relX = smoothRelX,
+                    relY = smoothRelY,
+                    coordinateLabel = "X:${(smoothXMin * 100).toInt()} Y:${(smoothYMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
                     crop = matchedTarget.crop ?: matchedTrack.crop,
-                    xMin = matchedTarget.xMin,
-                    yMin = matchedTarget.yMin,
-                    xMax = matchedTarget.xMax,
-                    yMax = matchedTarget.yMax,
+                    xMin = smoothXMin,
+                    yMin = smoothYMin,
+                    xMax = smoothXMax,
+                    yMax = smoothYMax,
                     vx = newVx,
                     vy = newVy
                 )
@@ -484,16 +493,25 @@ class OnnxImageAnalyzer(
                 val newVx = 0.6f * (targetCenterX - matchedTrack.relX) + 0.4f * matchedTrack.vx
                 val newVy = 0.6f * (targetCenterY - matchedTrack.relY) + 0.4f * matchedTrack.vy
 
+                // EMA smoothing — blend previous tracked position with new detection to reduce jitter
+                val smoothAlpha = 0.4f
+                val smoothXMin = matchedTrack.xMin * (1 - smoothAlpha) + matchedTarget.xMin * smoothAlpha
+                val smoothYMin = matchedTrack.yMin * (1 - smoothAlpha) + matchedTarget.yMin * smoothAlpha
+                val smoothXMax = matchedTrack.xMax * (1 - smoothAlpha) + matchedTarget.xMax * smoothAlpha
+                val smoothYMax = matchedTrack.yMax * (1 - smoothAlpha) + matchedTarget.yMax * smoothAlpha
+                val smoothRelX = matchedTrack.relX * (1 - smoothAlpha) + targetCenterX * smoothAlpha
+                val smoothRelY = matchedTrack.relY * (1 - smoothAlpha) + targetCenterY * smoothAlpha
+
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
-                    relX = targetCenterX,
-                    relY = targetCenterY,
-                    coordinateLabel = "X:${(matchedTarget.xMin * 100).toInt()} Y:${(matchedTarget.yMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
+                    relX = smoothRelX,
+                    relY = smoothRelY,
+                    coordinateLabel = "X:${(smoothXMin * 100).toInt()} Y:${(smoothYMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
                     crop = matchedTarget.crop ?: matchedTrack.crop,
-                    xMin = matchedTarget.xMin,
-                    yMin = matchedTarget.yMin,
-                    xMax = matchedTarget.xMax,
-                    yMax = matchedTarget.yMax,
+                    xMin = smoothXMin,
+                    yMin = smoothYMin,
+                    xMax = smoothXMax,
+                    yMax = smoothYMax,
                     vx = newVx,
                     vy = newVy
                 )

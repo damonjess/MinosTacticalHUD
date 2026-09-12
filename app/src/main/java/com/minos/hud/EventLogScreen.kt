@@ -168,7 +168,10 @@ fun LogTab(text: String, active: Boolean, modifier: Modifier, onClick: () -> Uni
 fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
     val bitmap = remember(event.thumbnailPath) {
         try {
-            BitmapFactory.decodeFile(event.thumbnailPath)
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            BitmapFactory.decodeFile(event.thumbnailPath, opts)
         } catch (e: Exception) {
             null
         }
@@ -295,7 +298,10 @@ fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete
     val fullBitmap = remember(event.id) {
         val path = event.fullImagePath ?: event.thumbnailPath
         try {
-            BitmapFactory.decodeFile(path) ?: BitmapFactory.decodeFile(event.thumbnailPath)
+            val opts = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            BitmapFactory.decodeFile(path, opts) ?: BitmapFactory.decodeFile(event.thumbnailPath, opts)
         } catch (e: Exception) {
             null
         }
@@ -365,7 +371,7 @@ fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete
                                 bitmap = fullBitmap.asImageBitmap(),
                                 contentDescription = "High-Res Detection Capture",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Fit
+                                contentScale = ContentScale.Crop
                             )
                         } else {
                             Text("UNABLE TO LOAD FULL IMAGE", color = Color.Red, fontFamily = FontFamily.Monospace)
