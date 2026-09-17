@@ -3,7 +3,6 @@ package com.minos.hud
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
-import android.util.Log
 import android.view.View
 import kotlin.math.max
 import kotlin.math.min
@@ -40,35 +39,35 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     private val textPaint = Paint().apply {
         color = Color.parseColor("#00FF66")
-        textSize = 34f
+        textSize = 32f
         isAntiAlias = true
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         textAlign = Paint.Align.LEFT
     }
 
     private val textBgPaint = Paint().apply {
-        color = Color.parseColor("#FF03090F")
+        color = Color.argb(180, 3, 9, 15) // Semi-transparent dark background
         style = Paint.Style.FILL
         isAntiAlias = true
     }
 
     private val tetherPaint = Paint().apply {
         color = Color.parseColor("#FFA500")
-        strokeWidth = 2f
+        strokeWidth = 1.5f
         style = Paint.Style.STROKE
         isAntiAlias = true
-        alpha = 75
+        alpha = 40 // Reduced tether clutter
     }
 
     var magTrackTargets: List<MagTrackTarget> = emptyList()
     var targets: List<YoloTarget> = emptyList()
     var isYoloBoxesEnabled: Boolean = true
-    var sensitivityThreshold: Float = 0.45f
+    var sensitivityThreshold: Float = 0.30f
+    var activeProfile: String = "OUTDOOR"
 
     private var camSourceWidth = 720f
     private var camSourceHeight = 1280f
 
-    // --- Temporal smoothing state ---
     private var lastUpdateTimeMs: Long = System.currentTimeMillis()
     private var isAnimating = false
 
@@ -84,14 +83,11 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private val smoothedTracks = mutableListOf<SmoothedTrack>()
     private val maxTracks = 15
 
-    // Conservative prediction parameters — tuned to prevent drift
-    private val smoothingAlpha = 0.3f       // EMA position factor (lower = more stable)
-    private val velocityAlpha = 0.12f       // EMA velocity factor (lower = smoother velocity)
-    private val maxPredictionTime = 0.06f   // Cap prediction at 60ms to prevent drift
-    private val maxVelocity = 1.0f          // Max normalized velocity per second
-    private val velocityDecay = 0.85f       // Velocity decays toward zero without new detections
-    private val maxMissedFrames = 1         // Remove track after 1 missed frame
-    private val matchDistanceThreshold = 0.12f  // Max squared center distance to match
+    private val maxPredictionTime = 0.10f    // Cap prediction at 100ms to prevent drift
+    private val maxVelocity = 1.5f           // Max normalized velocity per second
+    private val velocityDecay = 0.85f        // Velocity decay without detections
+    private val maxMissedFrames = 2          // Expire tracks after 2 missed frames
+    private val matchDistanceThreshold = 0.12f
 
     fun setCameraSourceDimensions(width: Int, height: Int) {
         camSourceWidth = width.toFloat()
@@ -101,13 +97,12 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     fun updateTargets(newTargets: List<YoloTarget>) {
         val now = System.currentTimeMillis()
         val dt = maxOf(0.001f, (now - lastUpdateTimeMs) / 1000.0f)
+        val smoothingAlpha = if (activeProfile.uppercase() == "MOVING") 0.80f else 0.70f
 
-        // Match new detections to existing smoothed tracks by proximity
         val matched = BooleanArray(newTargets.size) { false }
         val updatedTracks = mutableListOf<SmoothedTrack>()
 
         for (existing in smoothedTracks) {
-            // Predict where this track should be now based on velocity
             val predCx = (existing.xMin + existing.xMax) / 2f + existing.vx * dt
             val predCy = (existing.yMin + existing.yMax) / 2f + existing.vy * dt
 
@@ -130,7 +125,6 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 matched[bestIdx] = true
                 val t = newTargets[bestIdx]
 
-                // Compute instantaneous velocity from position delta
                 val tcx = (t.xMin + t.xMax) / 2f
                 val tcy = (t.yMin + t.yMax) / 2f
                 val ecx = (existing.xMin + existing.xMax) / 2f
@@ -138,13 +132,12 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 val newVx = ((tcx - ecx) / dt).coerceIn(-maxVelocity, maxVelocity)
                 val newVy = ((tcy - ecy) / dt).coerceIn(-maxVelocity, maxVelocity)
 
-                // EMA smoothing — blends old smoothed position with new detection
                 existing.xMin = existing.xMin * (1 - smoothingAlpha) + t.xMin * smoothingAlpha
                 existing.yMin = existing.yMin * (1 - smoothingAlpha) + t.yMin * smoothingAlpha
                 existing.xMax = existing.xMax * (1 - smoothingAlpha) + t.xMax * smoothingAlpha
                 existing.yMax = existing.yMax * (1 - smoothingAlpha) + t.yMax * smoothingAlpha
-                existing.vx = existing.vx * (1 - velocityAlpha) + newVx * velocityAlpha
-                existing.vy = existing.vy * (1 - velocityAlpha) + newVy * velocityAlpha
+                existing.vx = existing.vx * 0.30f + newVx * 0.70f
+                existing.vy = existing.vy * 0.30f + newVy * 0.70f
                 existing.label = t.label
                 existing.rawLabel = t.rawLabel
                 existing.confidence = t.confidence
@@ -153,7 +146,6 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
                 updatedTracks.add(existing)
             } else {
-                // Track not matched — keep for 1 more frame with decaying velocity
                 existing.missedCount++
                 if (existing.missedCount <= maxMissedFrames) {
                     updatedTracks.add(existing)
@@ -161,7 +153,6 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             }
         }
 
-        // Add new unmatched targets as fresh tracks
         for (i in newTargets.indices) {
             if (!matched[i] && updatedTracks.size < maxTracks) {
                 val t = newTargets[i]
@@ -190,11 +181,9 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         super.onDraw(canvas)
 
         val now = System.currentTimeMillis()
-        // Cap prediction time to prevent drift — only predict up to 60ms ahead
         val rawElapsed = (now - lastUpdateTimeMs) / 1000.0f
         val elapsed = min(rawElapsed, maxPredictionTime)
 
-        // Apply velocity decay when no new detection has arrived
         if (rawElapsed > 0.03f) {
             for (track in smoothedTracks) {
                 track.vx *= velocityDecay
@@ -212,14 +201,20 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val dx = (vWidth - scaledW) / 2f
         val dy = (vHeight - scaledH) / 2f
 
+        val safeTop = 260f // Safe area below top controls bar
+
         if (isYoloBoxesEnabled) {
             for (track in smoothedTracks) {
                 if (track.confidence >= sensitivityThreshold) {
-                    // Predict current position using velocity and capped elapsed time
-                    val predXMin = (track.xMin + track.vx * elapsed).coerceIn(0f, 1f)
-                    val predYMin = (track.yMin + track.vy * elapsed).coerceIn(0f, 1f)
-                    val predXMax = (track.xMax + track.vx * elapsed).coerceIn(0f, 1f)
-                    val predYMax = (track.yMax + track.vy * elapsed).coerceIn(0f, 1f)
+                    val pX1 = (track.xMin + track.vx * elapsed).coerceIn(0f, 1f)
+                    val pY1 = (track.yMin + track.vy * elapsed).coerceIn(0f, 1f)
+                    val pX2 = (track.xMax + track.vx * elapsed).coerceIn(0f, 1f)
+                    val pY2 = (track.yMax + track.vy * elapsed).coerceIn(0f, 1f)
+
+                    val predXMin = minOf(pX1, pX2)
+                    val predXMax = maxOf(pX1, pX2)
+                    val predYMin = minOf(pY1, pY2)
+                    val predYMax = maxOf(pY1, pY2)
 
                     val left = predXMin * scaledW + dx
                     val top = predYMin * scaledH + dy
@@ -239,21 +234,29 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     // Render Corner Brackets
                     drawTargetBrackets(canvas, left, top, right, bottom, paintToUse.color)
 
-                    // Render Label Backdrop & Text
-                    val labelText = "${track.label} [${(track.confidence * 100).toInt()}%]"
+                    // Shortened Clean Label Formatting
+                    val shortName = track.rawLabel.uppercase()
+                    val labelText = "$shortName ${(track.confidence * 100).toInt()}%"
                     textPaint.color = paintToUse.color
                     val textWidth = textPaint.measureText(labelText)
                     val minMarginX = 12f
                     val labelLeft = left.coerceIn(minMarginX, max(minMarginX, vWidth - textWidth - 16f))
-                    val labelTop = max(36f, top - 10f)
+                    
+                    // Position label safely inside or below top controls bar
+                    val rawLabelTop = top - 8f
+                    val labelTop = if (rawLabelTop < safeTop) {
+                        minOf(top + 32f, bottom - 8f)
+                    } else {
+                        rawLabelTop
+                    }
 
-                    canvas.drawRect(labelLeft - 4f, labelTop - 32f, labelLeft + textWidth + 12f, labelTop + 6f, textBgPaint)
+                    canvas.drawRect(labelLeft - 4f, labelTop - 28f, labelLeft + textWidth + 10f, labelTop + 6f, textBgPaint)
                     canvas.drawText(labelText, labelLeft + 4f, labelTop - 6f, textPaint)
                 }
             }
         }
 
-        // Draw mag track targets (circles + tethers) with conservative velocity prediction
+        // Draw mag track targets (circles + subtle tethers)
         if (isYoloBoxesEnabled) {
             magTrackTargets.forEach { target ->
                 val predX = (target.relX + target.vx * elapsed).coerceIn(0f, 1f)
@@ -265,17 +268,15 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 canvas.drawCircle(pixelX, pixelY, 8f, vehiclePaint)
 
                 val anchor = when (target.id) {
-                    "TRACK-01" -> PointF(vWidth * 0.15f, vHeight * 0.15f)
-                    "TRACK-02" -> PointF(vWidth * 0.85f, vHeight * 0.15f)
+                    "TRACK-01" -> PointF(vWidth * 0.15f, safeTop + 20f)
+                    "TRACK-02" -> PointF(vWidth * 0.85f, safeTop + 20f)
                     "TRACK-03" -> PointF(vWidth * 0.15f, vHeight * 0.85f)
                     else -> PointF(vWidth * 0.85f, vHeight * 0.85f)
                 }
-                tetherPaint.alpha = 75
                 canvas.drawLine(anchor.x, anchor.y, pixelX, pixelY, tetherPaint)
             }
         }
 
-        // Continue animating for smooth prediction between detection frames
         if (isAnimating && smoothedTracks.isNotEmpty()) {
             postInvalidateOnAnimation()
         } else {
@@ -284,10 +285,10 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     }
 
     private fun drawTargetBrackets(canvas: Canvas, l: Float, t: Float, r: Float, b: Float, colorInt: Int) {
-        val bracket = 24f
+        val bracket = 22f
         val bracketPaint = Paint().apply {
             color = colorInt
-            strokeWidth = 6f
+            strokeWidth = 5f
             style = Paint.Style.STROKE
             isAntiAlias = true
         }

@@ -4,6 +4,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
+import android.util.Log
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -42,21 +43,27 @@ class YoloAnalyzer(
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     init {
-        val options = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(4)
-            setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-            try {
-                addNnapi()
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-
         try {
-            context.assets.open(modelPath).use { input ->
-                ortSession = ortEnv.createSession(input.readBytes(), options)
+            val modelBytes = context.assets.open(modelPath).use { it.readBytes() }
+            try {
+                val nnapiOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                    addNnapi()
+                }
+                ortSession = ortEnv.createSession(modelBytes, nnapiOptions)
+                Log.i("YoloAnalyzer", "Successfully loaded $modelPath with NNAPI execution provider.")
+            } catch (e: Exception) {
+                Log.w("YoloAnalyzer", "NNAPI initialization failed for $modelPath (${e.message}). Falling back to CPU execution.", e)
+                val cpuOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                }
+                ortSession = ortEnv.createSession(modelBytes, cpuOptions)
+                Log.i("YoloAnalyzer", "Successfully loaded $modelPath with CPU execution provider.")
             }
         } catch (e: Exception) {
+            Log.e("YoloAnalyzer", "Failed to load $modelPath", e)
             e.printStackTrace()
         }
 

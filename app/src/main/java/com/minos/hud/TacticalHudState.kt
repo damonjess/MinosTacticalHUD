@@ -20,7 +20,9 @@ data class MagTrackTarget(
     val xMax: Float = relX + 0.05f,
     val yMax: Float = relY + 0.05f,
     val vx: Float = 0f,
-    val vy: Float = 0f
+    val vy: Float = 0f,
+    val lastUpdateNs: Long = System.nanoTime(),
+    val missedCount: Int = 0
 )
 
 data class YoloTarget(

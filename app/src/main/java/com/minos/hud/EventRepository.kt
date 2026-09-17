@@ -60,22 +60,24 @@ object EventRepository {
         val thumbFile = File(eventDir, "thumb_$id.jpg")
         val fullFile = File(eventDir, "full_$id.jpg")
 
-        // Safe aspect thumbnail downscaling — higher resolution for sharper previews
-        val targetWidth = 480
+        // Safe aspect thumbnail downscaling — do not upscale small crops
+        val targetWidth = minOf(480, bitmap.width)
         val targetHeight = maxOf(1, targetWidth * bitmap.height / maxOf(1, bitmap.width))
-        val thumbBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        val thumbBitmap = if (targetWidth < bitmap.width) {
+            Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+        } else {
+            bitmap
+        }
         
         FileOutputStream(thumbFile).use { out ->
             thumbBitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
         }
         if (thumbBitmap != bitmap) thumbBitmap.recycle()
 
-        // Save the expanded event image as the original detection crop so VIEW FULL
-        // stays zoomed in on the detected subject instead of showing the wide frame.
-        // (The wide fullFrame is intentionally not used here — the event viewer should
-        // keep the same zoomed-in framing as the thumbnail.)
+        // Save the expanded event image as the original resolution crop so VIEW FULL
+        // stays zoomed in on the detected subject with full original quality.
         FileOutputStream(fullFile).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
         }
 
         val metadataFile = File(eventDir, "$id.metadata")

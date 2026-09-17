@@ -16,7 +16,6 @@ import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import androidx.core.content.ContextCompat
 import java.nio.FloatBuffer
 import java.util.concurrent.Executors
 import kotlin.math.max
@@ -32,6 +31,8 @@ class OnnxImageAnalyzer(
     private val getDigitalZoom: () -> Float,
     private val setDigitalZoom: (Float) -> Unit,
     private val getIsCaptureOn: () -> Boolean,
+    private val getCurrentProfile: () -> String = { "OUTDOOR" },
+    private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onFpsUpdated: (fps: Int) -> Unit,
     private val onModelLoadError: ((String) -> Unit)? = null
@@ -43,15 +44,15 @@ class OnnxImageAnalyzer(
     private var ortSession: OrtSession? = null
 
     private var licensePlateDetector: LicensePlateDetector? = null
-    private val captureManager = CaptureManager(context)
+    private val captureManager = CaptureManager(context, onTriggerHighResCapture)
     private val captureExecutor = Executors.newSingleThreadExecutor()
 
     // Pre-allocated reusable buffers to eliminate Garbage Collection churn
-    private val modelInputSize = 640
-    private val tensorBuffer: FloatBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
-    private val pixelArray = IntArray(modelInputSize * modelInputSize)
-    private val letterboxBitmap: Bitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
-    private val letterboxCanvas = Canvas(letterboxBitmap)
+    private var modelInputSize = 512
+    private var tensorBuffer: FloatBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
+    private var pixelArray = IntArray(modelInputSize * modelInputSize)
+    private var letterboxBitmap: Bitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
+    private var letterboxCanvas = Canvas(letterboxBitmap)
     private val letterboxPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     private var nextTrackId = 1
@@ -59,6 +60,17 @@ class OnnxImageAnalyzer(
 
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
+
+    private var lastTrackUpdateNs = 0L
+    private var lastPlateDetectionNs = 0L
+    private val plateIntervalNs = 400_000_000L // 400 ms time throttle
+
+    private var lastTelemetryTime = 0L
+    private var plateScansCount = 0
+    private var expiredTracksCount = 0
+
+    private val trackIouThreshold = 0.25f
+    private val fallbackDistanceSquared = 0.04f
 
     private val labels = listOf(
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
@@ -73,6 +85,8 @@ class OnnxImageAnalyzer(
         "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
     )
 
+    private val defaultClasses = labels.map { it.lowercase().trim() }.toSet()
+
     private var modelLoadError: String? = null
 
     init {
@@ -80,7 +94,6 @@ class OnnxImageAnalyzer(
             licensePlateDetector = LicensePlateDetector(context)
         } catch (e: Exception) {
             Log.e("OnnxImageAnalyzer", "Failed to init LicensePlateDetector", e)
-            e.printStackTrace()
         }
 
         try {
@@ -88,13 +101,14 @@ class OnnxImageAnalyzer(
             if (env != null) {
                 val modelBytes = context.assets.open(modelName).use { it.readBytes() }
                 
+                var session: OrtSession? = null
                 try {
                     val nnapiOptions = OrtSession.SessionOptions().apply {
                         setIntraOpNumThreads(4)
                         setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
                         addNnapi()
                     }
-                    ortSession = env.createSession(modelBytes, nnapiOptions)
+                    session = env.createSession(modelBytes, nnapiOptions)
                     Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with NNAPI execution provider.")
                 } catch (e: Exception) {
                     Log.w("OnnxImageAnalyzer", "NNAPI initialization failed for $modelName (${e.message}). Falling back to CPU execution.", e)
@@ -102,16 +116,28 @@ class OnnxImageAnalyzer(
                         setIntraOpNumThreads(4)
                         setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
                     }
-                    ortSession = env.createSession(modelBytes, cpuOptions)
+                    session = env.createSession(modelBytes, cpuOptions)
                     Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with CPU execution provider.")
                 }
+                ortSession = session
+
+                modelInputSize = 640
+                reallocateBuffers(modelInputSize)
             }
         } catch (e: Exception) {
             modelLoadError = "Failed to load $modelName: ${e.message}"
             Log.e("OnnxImageAnalyzer", modelLoadError!!, e)
             onModelLoadError?.invoke(modelLoadError!!)
-            e.printStackTrace()
         }
+    }
+
+    private fun reallocateBuffers(size: Int) {
+        modelInputSize = size
+        tensorBuffer = FloatBuffer.allocate(1 * 3 * size * size)
+        pixelArray = IntArray(size * size)
+        if (!letterboxBitmap.isRecycled) letterboxBitmap.recycle()
+        letterboxBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        letterboxCanvas = Canvas(letterboxBitmap)
     }
 
     @OptIn(ExperimentalGetImage::class)
@@ -127,7 +153,6 @@ class OnnxImageAnalyzer(
 
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
 
-        // Native Bitmap extraction
         val rawBitmap = try {
             imageProxy.toBitmap()
         } catch (e: Exception) {
@@ -165,21 +190,18 @@ class OnnxImageAnalyzer(
             val outputs = session.run(inputs)
 
             if (outputs != null) {
-                val outputTensor = outputs.get(0) as OnnxTensor
-                Log.d("OnnxImageAnalyzer", "Output shape=${outputTensor.info.shape.contentToString()}")
-
                 val sensitivity = getSensitivityThreshold()
                 val maxDet = getMaxDetections()
                 val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
 
-                val plateTargets = updateMagTrackTargets(targets, rotatedBitmap)
+                val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, startTime)
                 targets.addAll(plateTargets)
 
                 val inferenceTime = System.currentTimeMillis() - startTime
                 val width = rotatedBitmap.width
                 val height = rotatedBitmap.height
 
-                val magTracksCopy = activeTracks.toList()
+                val magTracksCopy = synchronized(activeTracks) { activeTracks.toList() }
                 val yoloTargetsCopy = targets.toList()
 
                 mainHandler.post {
@@ -192,7 +214,6 @@ class OnnxImageAnalyzer(
             mainHandler.post {
                 onModelLoadError?.invoke("Inference failed: ${e.message}")
             }
-            e.printStackTrace()
         } finally {
             rotatedBitmap.recycle()
         }
@@ -252,6 +273,7 @@ class OnnxImageAnalyzer(
         val candidateTargets = mutableListOf<YoloTarget>()
         val srcW = sourceBitmap.width.toFloat()
         val srcH = sourceBitmap.height.toFloat()
+        val profile = getCurrentProfile().uppercase()
 
         for (i in 0 until numElements) {
             var maxScore = 0f
@@ -269,7 +291,17 @@ class OnnxImageAnalyzer(
                 }
             }
 
-            if (maxScore >= sensitivityThreshold) {
+            val rawName = labels.getOrNull(maxClassId) ?: "unknown"
+            val rawLower = rawName.lowercase().trim()
+
+            // Class Whitelist Filter
+            if (profile != "ALL_OBJECTS" && rawLower !in defaultClasses) {
+                continue
+            }
+
+            val classThreshold = maxOf(0.20f, sensitivityThreshold)
+
+            if (maxScore >= classThreshold) {
                 val cx = if (isTransposed) buffer.get(i * numChannels + 0) else buffer.get(0 * numElements + i)
                 val cy = if (isTransposed) buffer.get(i * numChannels + 1) else buffer.get(1 * numElements + i)
                 val w = if (isTransposed) buffer.get(i * numChannels + 2) else buffer.get(2 * numElements + i)
@@ -279,8 +311,6 @@ class OnnxImageAnalyzer(
                 val yMin = ((cy - h / 2f) - info.padY) / (srcH * info.scale)
                 val xMax = ((cx + w / 2f) - info.padX) / (srcW * info.scale)
                 val yMax = ((cy + h / 2f) - info.padY) / (srcH * info.scale)
-
-                val rawName = labels.getOrNull(maxClassId) ?: "unknown"
 
                 candidateTargets.add(
                     YoloTarget(
@@ -304,8 +334,15 @@ class OnnxImageAnalyzer(
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
             val h = ((target.yMax - target.yMin) * sourceBitmap.height)
 
-            val padX = w * 0.2f
-            val padY = h * 0.2f
+            val padding = when (target.rawLabel.lowercase().trim()) {
+                "person" -> 0.10f
+                "car", "bus", "truck", "motorcycle" -> 0.12f
+                "plate", "license_plate", "license plate" -> 0.04f
+                else -> 0.08f
+            }
+
+            val padX = w * padding
+            val padY = h * padding
 
             val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
             val paddedTop = (top - padY).toInt().coerceAtLeast(0)
@@ -315,10 +352,18 @@ class OnnxImageAnalyzer(
             val paddedW = (paddedRight - paddedLeft).coerceAtLeast(1)
             val paddedH = (paddedBottom - paddedTop).coerceAtLeast(1)
 
-            val crop = try {
-                val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
-                cropped.copy(Bitmap.Config.ARGB_8888, false)
-            } catch (e: Exception) {
+            // Conditional crop allocation to eliminate GC memory churn
+            val isVehicle = target.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
+            val needsCrop = getIsCaptureOn() || getAutoMag() || isVehicle
+
+            val crop = if (needsCrop) {
+                try {
+                    val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
+                    cropped.copy(Bitmap.Config.ARGB_8888, false)
+                } catch (e: Exception) {
+                    null
+                }
+            } else {
                 null
             }
 
@@ -328,10 +373,6 @@ class OnnxImageAnalyzer(
                 crop = crop
             )
         }
-
-        Log.d("OnnxImageAnalyzer", "Raw candidates=${candidateTargets.size}")
-        Log.d("OnnxImageAnalyzer", "NMS results=${nmsSelected.size}")
-        Log.d("OnnxImageAnalyzer", "Final targets=${finalTargets.size}")
 
         return finalTargets
     }
@@ -357,26 +398,56 @@ class OnnxImageAnalyzer(
     }
 
     private fun processLicensePlateIfVehicle(yolo: YoloTarget, plateTargets: MutableList<YoloTarget>) {
-        val raw = yolo.rawLabel.lowercase()
+        val raw = yolo.rawLabel.lowercase().trim()
         if (raw in listOf("car", "bus", "truck", "motorcycle")) {
             yolo.crop?.let { vehicleCrop ->
-                licensePlateDetector?.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
-                    val p = plateResult.plateTarget
-                    val vW = yolo.xMax - yolo.xMin
-                    val vH = yolo.yMax - yolo.yMin
-                    val globalPlate = p.copy(
-                        xMin = yolo.xMin + p.xMin * vW,
-                        yMin = yolo.yMin + p.yMin * vH,
-                        xMax = yolo.xMin + p.xMax * vW,
-                        yMax = yolo.yMin + p.yMax * vH
-                    )
-                    plateTargets.add(globalPlate)
+                if (vehicleCrop.width >= 320 && vehicleCrop.height >= 180) {
+                    licensePlateDetector?.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
+                        val p = plateResult.plateTarget
+                        val vW = yolo.xMax - yolo.xMin
+                        val vH = yolo.yMax - yolo.yMin
+                        val globalPlate = p.copy(
+                            xMin = yolo.xMin + p.xMin * vW,
+                            yMin = yolo.yMin + p.yMin * vH,
+                            xMax = yolo.xMin + p.xMax * vW,
+                            yMax = yolo.yMin + p.yMax * vH
+                        )
+                        plateTargets.add(globalPlate)
+                    }
                 }
             }
         }
     }
 
-    private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap): List<YoloTarget> {
+    private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap, startTime: Long): List<YoloTarget> {
+        val nowNs = System.nanoTime()
+        val dt = if (lastTrackUpdateNs == 0L) {
+            0.033f
+        } else {
+            ((nowNs - lastTrackUpdateNs) / 1_000_000_000f).coerceIn(0.01f, 0.20f)
+        }
+        lastTrackUpdateNs = nowNs
+
+        val plateTargets = mutableListOf<YoloTarget>()
+
+        // Time-Based Deterministic Plate Scanner (400 ms throttle)
+        if (nowNs - lastPlateDetectionNs >= plateIntervalNs && (getIsCaptureOn() || getAutoMag())) {
+            val vehicleCandidates = targets.filter {
+                val raw = it.rawLabel.lowercase().trim()
+                raw in listOf("car", "bus", "truck", "motorcycle") && it.crop != null && it.crop.width >= 320 && it.crop.height >= 180
+            }
+
+            val topVehicle = vehicleCandidates.maxWithOrNull(
+                compareBy<YoloTarget> { (it.xMax - it.xMin) * (it.yMax - it.yMin) }.thenBy { it.confidence }
+            )
+
+            if (topVehicle != null) {
+                lastPlateDetectionNs = nowNs
+                plateScansCount++
+                processLicensePlateIfVehicle(topVehicle, plateTargets)
+            }
+        }
+
         if (getAutoMag() && targets.isNotEmpty()) {
             val bestTarget = targets.maxByOrNull { it.confidence }
             if (bestTarget != null && bestTarget.confidence > 0.7f && getDigitalZoom() < 2f) {
@@ -386,10 +457,9 @@ class OnnxImageAnalyzer(
 
         val updatedTracks = mutableListOf<MagTrackTarget>()
         val unassignedTargets = targets.toMutableList()
-        val remainingActiveTracks = activeTracks.toMutableList()
-        val plateTargets = mutableListOf<YoloTarget>()
+        val remainingActiveTracks = synchronized(activeTracks) { activeTracks.toMutableList() }
 
-        // 1. SORT / IOU Matching Phase with Velocity Prediction
+        // 1. IOU Matching Phase with Clamped Velocity Estimation
         while (remainingActiveTracks.isNotEmpty() && unassignedTargets.isNotEmpty()) {
             var bestIou = 0f
             var bestTrackIdx = -1
@@ -397,13 +467,16 @@ class OnnxImageAnalyzer(
 
             for (tIdx in remainingActiveTracks.indices) {
                 val track = remainingActiveTracks[tIdx]
-                val predXmin = track.xMin + track.vx
-                val predYmin = track.yMin + track.vy
-                val predXmax = track.xMax + track.vx
-                val predYmax = track.yMax + track.vy
+                val predXmin = track.xMin + track.vx * dt
+                val predYmin = track.yMin + track.vy * dt
+                val predXmax = track.xMax + track.vx * dt
+                val predYmax = track.yMax + track.vy * dt
 
                 for (yIdx in unassignedTargets.indices) {
                     val yolo = unassignedTargets[yIdx]
+                    val sameClass = track.rawLabel.isEmpty() || track.rawLabel.equals(yolo.rawLabel, ignoreCase = true)
+                    if (!sameClass) continue
+
                     val iou = calculateIou(
                         predXmin, predYmin, predXmax, predYmax,
                         yolo.xMin, yolo.yMin, yolo.xMax, yolo.yMax
@@ -416,41 +489,35 @@ class OnnxImageAnalyzer(
                 }
             }
 
-            if (bestIou >= 0.15f && bestTrackIdx != -1 && bestTargetIdx != -1) {
+            if (bestIou >= trackIouThreshold && bestTrackIdx != -1 && bestTargetIdx != -1) {
                 val matchedTrack = remainingActiveTracks.removeAt(bestTrackIdx)
                 val matchedTarget = unassignedTargets.removeAt(bestTargetIdx)
 
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val newVx = 0.6f * (targetCenterX - matchedTrack.relX) + 0.4f * matchedTrack.vx
-                val newVy = 0.6f * (targetCenterY - matchedTrack.relY) + 0.4f * matchedTrack.vy
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
 
-                // EMA smoothing — blend previous tracked position with new detection to reduce jitter
-                val smoothAlpha = 0.4f
-                val smoothXMin = matchedTrack.xMin * (1 - smoothAlpha) + matchedTarget.xMin * smoothAlpha
-                val smoothYMin = matchedTrack.yMin * (1 - smoothAlpha) + matchedTarget.yMin * smoothAlpha
-                val smoothXMax = matchedTrack.xMax * (1 - smoothAlpha) + matchedTarget.xMax * smoothAlpha
-                val smoothYMax = matchedTrack.yMax * (1 - smoothAlpha) + matchedTarget.yMax * smoothAlpha
-                val smoothRelX = matchedTrack.relX * (1 - smoothAlpha) + targetCenterX * smoothAlpha
-                val smoothRelY = matchedTrack.relY * (1 - smoothAlpha) + targetCenterY * smoothAlpha
+                val newVx = 0.70f * measuredVx + 0.30f * matchedTrack.vx
+                val newVy = 0.70f * measuredVy + 0.30f * matchedTrack.vy
 
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
-                    relX = smoothRelX,
-                    relY = smoothRelY,
-                    coordinateLabel = "X:${(smoothXMin * 100).toInt()} Y:${(smoothYMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
+                    relX = targetCenterX,
+                    relY = targetCenterY,
+                    coordinateLabel = "X:${(matchedTarget.xMin * 100).toInt()} Y:${(matchedTarget.yMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
                     crop = matchedTarget.crop ?: matchedTrack.crop,
-                    xMin = smoothXMin,
-                    yMin = smoothYMin,
-                    xMax = smoothXMax,
-                    yMax = smoothYMax,
+                    xMin = matchedTarget.xMin,
+                    yMin = matchedTarget.yMin,
+                    xMax = matchedTarget.xMax,
+                    yMax = matchedTarget.yMax,
                     vx = newVx,
-                    vy = newVy
+                    vy = newVy,
+                    lastUpdateNs = nowNs,
+                    missedCount = 0
                 )
                 updatedTracks.add(updatedTrack)
-
-                processLicensePlateIfVehicle(matchedTarget, plateTargets)
             } else {
                 break
             }
@@ -464,11 +531,14 @@ class OnnxImageAnalyzer(
 
             for (tIdx in remainingActiveTracks.indices) {
                 val track = remainingActiveTracks[tIdx]
-                val predCx = track.relX + track.vx
-                val predCy = track.relY + track.vy
+                val predCx = track.relX + track.vx * dt
+                val predCy = track.relY + track.vy * dt
 
                 for (yIdx in unassignedTargets.indices) {
                     val yolo = unassignedTargets[yIdx]
+                    val sameClass = track.rawLabel.isEmpty() || track.rawLabel.equals(yolo.rawLabel, ignoreCase = true)
+                    if (!sameClass) continue
+
                     val targetCenterX = (yolo.xMin + yolo.xMax) / 2f
                     val targetCenterY = (yolo.yMin + yolo.yMax) / 2f
                     val dx = predCx - targetCenterX
@@ -483,48 +553,52 @@ class OnnxImageAnalyzer(
                 }
             }
 
-            if (bestDistSq < 0.16f && bestTrackIdx != -1 && bestTargetIdx != -1) {
+            if (bestDistSq < fallbackDistanceSquared && bestTrackIdx != -1 && bestTargetIdx != -1) {
                 val matchedTrack = remainingActiveTracks.removeAt(bestTrackIdx)
                 val matchedTarget = unassignedTargets.removeAt(bestTargetIdx)
 
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val newVx = 0.6f * (targetCenterX - matchedTrack.relX) + 0.4f * matchedTrack.vx
-                val newVy = 0.6f * (targetCenterY - matchedTrack.relY) + 0.4f * matchedTrack.vy
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
 
-                // EMA smoothing — blend previous tracked position with new detection to reduce jitter
-                val smoothAlpha = 0.4f
-                val smoothXMin = matchedTrack.xMin * (1 - smoothAlpha) + matchedTarget.xMin * smoothAlpha
-                val smoothYMin = matchedTrack.yMin * (1 - smoothAlpha) + matchedTarget.yMin * smoothAlpha
-                val smoothXMax = matchedTrack.xMax * (1 - smoothAlpha) + matchedTarget.xMax * smoothAlpha
-                val smoothYMax = matchedTrack.yMax * (1 - smoothAlpha) + matchedTarget.yMax * smoothAlpha
-                val smoothRelX = matchedTrack.relX * (1 - smoothAlpha) + targetCenterX * smoothAlpha
-                val smoothRelY = matchedTrack.relY * (1 - smoothAlpha) + targetCenterY * smoothAlpha
+                val newVx = 0.70f * measuredVx + 0.30f * matchedTrack.vx
+                val newVy = 0.70f * measuredVy + 0.30f * matchedTrack.vy
 
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
-                    relX = smoothRelX,
-                    relY = smoothRelY,
-                    coordinateLabel = "X:${(smoothXMin * 100).toInt()} Y:${(smoothYMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
+                    relX = targetCenterX,
+                    relY = targetCenterY,
+                    coordinateLabel = "X:${(matchedTarget.xMin * 100).toInt()} Y:${(matchedTarget.yMin * 100).toInt()} Z:${(matchedTarget.confidence * 100).toInt()}%",
                     crop = matchedTarget.crop ?: matchedTrack.crop,
-                    xMin = smoothXMin,
-                    yMin = smoothYMin,
-                    xMax = smoothXMax,
-                    yMax = smoothYMax,
+                    xMin = matchedTarget.xMin,
+                    yMin = matchedTarget.yMin,
+                    xMax = matchedTarget.xMax,
+                    yMax = matchedTarget.yMax,
                     vx = newVx,
-                    vy = newVy
+                    vy = newVy,
+                    lastUpdateNs = nowNs,
+                    missedCount = 0
                 )
                 updatedTracks.add(updatedTrack)
-
-                processLicensePlateIfVehicle(matchedTarget, plateTargets)
             } else {
                 break
             }
         }
 
-        // 3. New Track Creation for Unassigned Targets
-        unassignedTargets.take(4 - updatedTracks.size).forEach { yolo ->
+        // 3. Expire unmatched tracks after 2 missed frames
+        for (unmatchedTrack in remainingActiveTracks) {
+            val missed = unmatchedTrack.missedCount + 1
+            if (missed <= 2) {
+                updatedTracks.add(unmatchedTrack.copy(missedCount = missed, vx = unmatchedTrack.vx * 0.85f, vy = unmatchedTrack.vy * 0.85f))
+            } else {
+                expiredTracksCount++
+            }
+        }
+
+        // 4. Create new tracks for unassigned targets
+        unassignedTargets.take(8 - updatedTracks.size).forEach { yolo ->
             val cx = (yolo.xMin + yolo.xMax) / 2f
             val cy = (yolo.yMin + yolo.yMax) / 2f
 
@@ -541,15 +615,17 @@ class OnnxImageAnalyzer(
                 xMax = yolo.xMax,
                 yMax = yolo.yMax,
                 vx = 0f,
-                vy = 0f
+                vy = 0f,
+                lastUpdateNs = nowNs,
+                missedCount = 0
             )
             updatedTracks.add(newTrack)
-
-            processLicensePlateIfVehicle(yolo, plateTargets)
         }
 
-        activeTracks.clear()
-        activeTracks.addAll(updatedTracks)
+        synchronized(activeTracks) {
+            activeTracks.clear()
+            activeTracks.addAll(updatedTracks)
+        }
 
         if (getIsCaptureOn()) {
             updatedTracks.forEach { track ->
@@ -562,22 +638,56 @@ class OnnxImageAnalyzer(
 
                 if (category != null) {
                     track.crop?.let { bitmap ->
-                        val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
-                        captureManager.processDetection(track.id, raw.uppercase(), category, bitmap, score, fullFrame)
+                        val conf = track.coordinateLabel.substringAfter("Z:").substringBefore("%").toFloatOrNull()?.div(100f) ?: 0.5f
+                        val score = BestFrameSelector.calculateScore(bitmap, confidence = conf)
+                        captureManager.processDetection(
+                            track.id,
+                            raw.uppercase(),
+                            category,
+                            bitmap,
+                            score,
+                            fullFrame,
+                            track.xMin,
+                            track.yMin,
+                            track.xMax,
+                            track.yMax,
+                            track.rawLabel
+                        )
                     }
                 }
             }
             
-            // Also process plates through CaptureManager
             plateTargets.forEach { plateTarget ->
                 plateTarget.crop?.let { bitmap ->
-                    val score = BestFrameSelector.calculateScore(bitmap, 0f, 0f, 1f, 1f)
-                    // Generate a deterministic ID for the plate based on its parent vehicle bounds to group captures
+                    val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
                     val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
-                    captureManager.processDetection(plateId, "LICENSE PLATE", EventCategory.PLATES, bitmap, score, fullFrame)
+                    captureManager.processDetection(
+                        plateId,
+                        "LICENSE PLATE",
+                        EventCategory.PLATES,
+                        bitmap,
+                        score,
+                        fullFrame,
+                        plateTarget.xMin,
+                        plateTarget.yMin,
+                        plateTarget.xMax,
+                        plateTarget.yMax,
+                        "plate"
+                    )
                 }
             }
         }
+
+        // 1-second Telemetry Logging
+        val totalAnalyzerTime = System.currentTimeMillis() - startTime
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastTelemetryTime >= 1000) {
+            Log.i("OnnxImageAnalyzer", "Telemetry: input=${modelInputSize}x${modelInputSize}, inference=${System.currentTimeMillis() - startTime}ms, analyzer=${totalAnalyzerTime}ms, FPS=${frameCount}, activeTracks=${updatedTracks.size}, plateScans=${plateScansCount}, expiredTracks=${expiredTracksCount}")
+            plateScansCount = 0
+            expiredTracksCount = 0
+            lastTelemetryTime = nowMs
+        }
+
         return plateTargets
     }
 

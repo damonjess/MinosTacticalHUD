@@ -297,17 +297,14 @@ fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
 @Composable
 fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete: () -> Unit) {
     val fullBitmap = remember(event.id) {
-        // Prefer the thumbnail (the zoomed detection crop) for the expanded view so
-        // tapping VIEW FULL stays zoomed in on the subject. Fall back to fullImagePath
-        // only if the thumbnail can't be decoded.
-        val path = event.thumbnailPath
+        // Prefer fullImagePath (full_<id>.jpg) for the high-res crop viewer.
+        // Fall back to thumbnailPath only if fullImagePath cannot be decoded.
+        val path = event.fullImagePath ?: event.thumbnailPath
         try {
             val opts = BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            BitmapFactory.decodeFile(path, opts) ?: event.fullImagePath?.let {
-                BitmapFactory.decodeFile(it, opts)
-            }
+            BitmapFactory.decodeFile(path, opts) ?: BitmapFactory.decodeFile(event.thumbnailPath, opts)
         } catch (e: Exception) {
             null
         }

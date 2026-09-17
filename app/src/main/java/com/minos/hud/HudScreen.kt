@@ -48,12 +48,14 @@ fun MainContent(
                     it.magTrackTargets = viewModel.trackedTargets
                     it.isYoloBoxesEnabled = viewModel.isYoloBoxesEnabled
                     it.sensitivityThreshold = viewModel.sensitivityThreshold
+                    it.activeProfile = viewModel.currentProfile
                     onHudOverlayCreated(it)
                 }
             },
             update = {
                 it.isYoloBoxesEnabled = viewModel.isYoloBoxesEnabled
                 it.sensitivityThreshold = viewModel.sensitivityThreshold
+                it.activeProfile = viewModel.currentProfile
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -175,14 +177,28 @@ fun CaptureHUD(
         Spacer(modifier = Modifier.height(12.dp))
 
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(text = "PROFILE  •  ${viewModel.currentProfile}", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = "PROFILE  •  ${viewModel.currentProfile}", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                val motionStatus = when {
+                    viewModel.inferenceValue > 110 -> "TRACKING WEAK"
+                    viewModel.fpsValue in 1..11 -> "LOW FPS"
+                    else -> "TRACKING OPTIMAL"
+                }
+                Text(text = motionStatus, color = Color(0xFF00FF9D), fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            }
             Spacer(modifier = Modifier.height(6.dp))
             Row {
                 ProfileButton("INDOOR", viewModel.currentProfile == "INDOOR") { viewModel.currentProfile = "INDOOR" }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 ProfileButton("OUTDOOR", viewModel.currentProfile == "OUTDOOR") { viewModel.currentProfile = "OUTDOOR" }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 ProfileButton("MOVING", viewModel.currentProfile == "MOVING") { viewModel.currentProfile = "MOVING" }
+                Spacer(modifier = Modifier.width(6.dp))
+                ProfileButton("ALL", viewModel.currentProfile == "ALL_OBJECTS") { viewModel.currentProfile = "ALL_OBJECTS" }
             }
         }
 

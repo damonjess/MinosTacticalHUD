@@ -19,7 +19,7 @@ class MainViewModel : ViewModel() {
     var motionArrayOn by mutableStateOf(true)
     var autoTargetLock by mutableStateOf(true)
     var digitalZoom by mutableStateOf(1.0f)
-    var sensitivityThreshold by mutableStateOf(0.45f)
+    var sensitivityThreshold by mutableStateOf(0.30f)
     var showDossier by mutableStateOf(false)
     var isYoloBoxesEnabled by mutableStateOf(true)
     var maxDetections by mutableStateOf(15)
