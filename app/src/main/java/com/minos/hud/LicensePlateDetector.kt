@@ -12,10 +12,18 @@ data class PlateDetectionResult(
     val plateCrop: Bitmap
 )
 
-class LicensePlateDetector(context: Context) : AutoCloseable {
+class LicensePlateDetector(
+    context: Context,
+    var minConfidence: Float = 0.25f,
+    var minAspectRatio: Float = 0.8f,
+    var maxAspectRatio: Float = 10.0f
+) : AutoCloseable {
     private val ortEnv: OrtEnvironment = OrtEnvironment.getEnvironment()
     private var ortSession: OrtSession? = null
     private val modelInputSize = 640
+
+    val isLoaded: Boolean
+        get() = ortSession != null
 
     // Pre-allocated reusable buffers to eliminate GC churn
     private val resizedBitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
@@ -50,9 +58,14 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
         }
     }
 
-    fun detectAndCropPlate(vehicleBitmap: Bitmap): PlateDetectionResult? {
+    fun detectAndCropPlate(
+        vehicleBitmap: Bitmap,
+        confidenceThreshold: Float = minConfidence,
+        minRatio: Float = minAspectRatio,
+        maxRatio: Float = maxAspectRatio
+    ): PlateDetectionResult? {
         val session = ortSession ?: return null
-        if (vehicleBitmap.isRecycled || vehicleBitmap.width < 100 || vehicleBitmap.height < 60) return null
+        if (vehicleBitmap.isRecycled || vehicleBitmap.width < 80 || vehicleBitmap.height < 40) return null
 
         val srcW = vehicleBitmap.width.toFloat()
         val srcH = vehicleBitmap.height.toFloat()
@@ -94,7 +107,7 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
             
             val numBoxes = shape[1].toInt()
             val numFeatures = shape[2].toInt()
-            var maxConf = 0.35f
+            var maxConf = confidenceThreshold.coerceAtLeast(0.15f)
 
             for (i in 0 until numBoxes) {
                 val offset = i * numFeatures
@@ -109,8 +122,8 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
                     val h = buffer.get(offset + 3) / (scale * srcH)
                     
                     val aspectRatio = w / maxOf(0.01f, h)
-                    // Plausible plate aspect ratios
-                    if (aspectRatio in 1.4f..8.5f) {
+                    // Plausible plate aspect ratios (supports oblique angles, square plates, wide ratios)
+                    if (aspectRatio in minRatio..maxRatio) {
                         val xMin = (cx - w / 2f).coerceIn(0f, 1f)
                         val yMin = (cy - h / 2f).coerceIn(0f, 1f)
                         val xMax = (cx + w / 2f).coerceIn(0f, 1f)

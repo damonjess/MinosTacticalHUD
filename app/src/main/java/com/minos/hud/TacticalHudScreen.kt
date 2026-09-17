@@ -179,10 +179,6 @@ fun TacticalHudScreen(viewModel: TacticalHudViewModel = androidx.lifecycle.viewm
                     Box(modifier = Modifier.weight(1f).border(1.dp, CyberSecPalette.CyberNetGreen).padding(8.dp), contentAlignment = Alignment.Center) {
                         Text("AUTO TARGET\nLOCK", color = CyberSecPalette.CyberNetGreen, fontSize = 11.sp, fontFamily = FontFamily.Monospace, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Box(modifier = Modifier.weight(1f).border(1.dp, CyberSecPalette.CyberNetGreen).padding(8.dp), contentAlignment = Alignment.Center) {
-                        Text("RADAR SWEEP\nON", color = CyberSecPalette.CyberNetGreen, fontSize = 11.sp, fontFamily = FontFamily.Monospace, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))

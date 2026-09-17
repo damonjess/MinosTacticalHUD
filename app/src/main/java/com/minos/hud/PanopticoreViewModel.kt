@@ -39,7 +39,6 @@ class PanopticoreViewModel : ViewModel() {
     // Toggles
     var motionArrayEnabled by mutableStateOf(true)
     var autoTargetLock by mutableStateOf(true)
-    var radarSweepEnabled by mutableStateOf(true)
     
     // Metrics
     var currentFps by mutableStateOf(0)

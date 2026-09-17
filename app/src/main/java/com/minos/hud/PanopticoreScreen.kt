@@ -79,12 +79,7 @@ fun TacticalCanvas(viewModel: PanopticoreViewModel) {
             drawLine(color, Offset(w - 20f, h - 20f), Offset(w - 20f, h - 20f - bracketSize), thickness)
         }
 
-        // 2. Dynamic Radar Sweep Line Layer (isolated continuous animation)
-        if (viewModel.radarSweepEnabled) {
-            RadarSweepCanvas(modifier = Modifier.fillMaxSize())
-        }
-
-        // 3. Dynamic Targets Overlay Layer (invalidated only when ML detection targets update)
+        // 2. Dynamic Targets Overlay Layer (invalidated only when ML detection targets update)
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
@@ -113,34 +108,6 @@ fun TacticalCanvas(viewModel: PanopticoreViewModel) {
     }
 }
 
-@Composable
-private fun RadarSweepCanvas(modifier: Modifier = Modifier) {
-    val infiniteTransition = rememberInfiniteTransition(label = "RadarSweep")
-    val radarRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "RadarRotation"
-    )
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val color = PanopticoreColors.CyberCyan
-        val radarRadius = 80f
-        val radarCenter = Offset(w - 120f, 150f)
-
-        // Radar background ring
-        drawCircle(color.copy(alpha = 0.2f), radarRadius, radarCenter, style = Stroke(2f))
-
-        // Dynamic sweeping radar line
-        rotate(radarRotation, radarCenter) {
-            drawLine(color, radarCenter, Offset(radarCenter.x, radarCenter.y - radarRadius), 3f)
-        }
-    }
-}
 
 @Composable
 fun TelemetryHeader(viewModel: PanopticoreViewModel) {
@@ -244,10 +211,6 @@ fun GeologPanel(viewModel: PanopticoreViewModel) {
             Spacer(Modifier.width(8.dp))
             TacticalButton("AUTO TARGET", viewModel.autoTargetLock, Modifier.weight(1f)) {
                 viewModel.autoTargetLock = !viewModel.autoTargetLock
-            }
-            Spacer(Modifier.width(8.dp))
-            TacticalButton("RADAR SWEEP", viewModel.radarSweepEnabled, Modifier.weight(1f)) {
-                viewModel.radarSweepEnabled = !viewModel.radarSweepEnabled
             }
         }
 

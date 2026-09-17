@@ -144,8 +144,6 @@ fun FixedCyberTerminalScreen(viewModel: CyberSecViewModel = androidx.lifecycle.v
                         TerminalButtonFrame("MOTION ARRAY\nON", active = true, modifier = Modifier.weight(1f))
                         Spacer(modifier = Modifier.width(8.dp))
                         TerminalButtonFrame("AUTO TARGET\nLOCK", active = true, modifier = Modifier.weight(1f))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        TerminalButtonFrame("RADAR SWEEP\nON", active = true, modifier = Modifier.weight(1f))
                     }
                 }
 

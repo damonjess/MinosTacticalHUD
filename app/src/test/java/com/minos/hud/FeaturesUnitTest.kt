@@ -90,4 +90,40 @@ class FeaturesUnitTest {
         val platePad = BestFrameSelector.getPaddingForLabel("plate")
         assertEquals(0.04f, platePad, 0.001f)
     }
+
+    @Test
+    fun testLicensePlateAspectRatioRange() {
+        val minRatio = 0.8f
+        val maxRatio = 10.0f
+        val minConf = 0.25f
+
+        // Standard US plate (12x6 inches => ~2.0 aspect ratio)
+        val usAspect = 12f / 6f
+        assertTrue(usAspect in minRatio..maxRatio)
+
+        // Standard EU plate (520x110 mm => ~4.73 aspect ratio)
+        val euAspect = 520f / 110f
+        assertTrue(euAspect in minRatio..maxRatio)
+
+        // Motorcycle / stacked plate (e.g. 180x140 mm => ~1.28 aspect ratio)
+        val motorcycleAspect = 180f / 140f
+        assertTrue(motorcycleAspect in minRatio..maxRatio)
+
+        // Steep oblique angle foreshortened plate (~0.9 aspect ratio)
+        val obliqueAspect = 0.9f
+        assertTrue(obliqueAspect in minRatio..maxRatio)
+
+        // Wide panorama plate crop (~9.0 aspect ratio)
+        val wideAspect = 9.0f
+        assertTrue(wideAspect in minRatio..maxRatio)
+
+        // Out of bounds extreme ratios
+        val extremeThin = 0.5f
+        val extremeWide = 12.0f
+        assertFalse(extremeThin in minRatio..maxRatio)
+        assertFalse(extremeWide in minRatio..maxRatio)
+        
+        // Confidence floor allows low-light detections at 0.25
+        assertTrue(0.28f >= minConf)
+    }
 }

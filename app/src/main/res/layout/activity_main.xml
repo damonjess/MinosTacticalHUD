@@ -215,15 +215,6 @@
                             android:text="AUTO TARGET\nLOCK"
                             android:textColor="#00FF66"
                             app:strokeColor="#00FF66" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnRadarSweep"
-                            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="RADAR SWEEP\nON"
-                            android:textColor="#00FF66"
-                            app:strokeColor="#00FF66" />
                     </LinearLayout>
                 </HorizontalScrollView>
 

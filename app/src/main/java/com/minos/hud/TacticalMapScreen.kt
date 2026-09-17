@@ -40,7 +40,7 @@ import org.osmdroid.views.overlay.mylocation.MyLocationNewOverlay
 @Composable
 fun TacticalMapScreen(onBack: () -> Unit) {
     val context = LocalContext.current
-    val enrolledPeople = remember { EnrolledFaceStore.getAll(context) }
+    val detectedEvents = EventRepository.events
     
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -203,14 +203,14 @@ fun TacticalMapScreen(onBack: () -> Unit) {
                             controller.setCenter(GeoPoint(51.5074, -0.1278))
 
                             // TARGET BLIP NODES
-                            enrolledPeople.forEachIndexed { index, person ->
-                                val seed = person.id.hashCode()
+                            detectedEvents.forEachIndexed { index, event ->
+                                val seed = event.id.hashCode()
                                 val latOffset = ((seed xor (seed shr 16)) and 0xFFFF) / 65535f * 1.5 - 0.75
                                 val lonOffset = ((seed xor (seed shl 13)) and 0xFFFF) / 65535f * 1.5 - 0.75
                                 
                                 val marker = Marker(this).apply {
                                     position = GeoPoint(51.5074 + latOffset, -0.1278 + lonOffset)
-                                    title = "TARGET: ${person.name.uppercase()}"
+                                    title = "EVENT: ${event.label.uppercase()}"
                                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                                 }
                                 overlays.add(marker)
@@ -264,7 +264,7 @@ fun TacticalMapScreen(onBack: () -> Unit) {
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "GEOGRAPHIC TARGET INDEX [COUNT: ${enrolledPeople.size}]",
+                        text = "GEOGRAPHIC TARGET INDEX [COUNT: ${detectedEvents.size}]",
                         color = Color(0xFF00FF00),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
@@ -272,11 +272,11 @@ fun TacticalMapScreen(onBack: () -> Unit) {
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     
-                    if (enrolledPeople.isEmpty()) {
+                    if (detectedEvents.isEmpty()) {
                         Text("NO TARGET DATA CHANNELS ACTIVE", color = Color(0xFF004400), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                     } else {
                         LazyColumn {
-                            items(enrolledPeople) { target ->
+                            items(detectedEvents) { target ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -284,7 +284,7 @@ fun TacticalMapScreen(onBack: () -> Unit) {
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(
-                                        text = "> OBJ: ${target.name.uppercase()}",
+                                        text = "> OBJ: ${target.label.uppercase()}",
                                         color = Color(0xFF00FF00),
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 14.sp

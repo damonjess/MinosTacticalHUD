@@ -36,27 +36,13 @@ fun CyberSecTerminalScreen(viewModel: CyberSecViewModel = androidx.lifecycle.vie
 
     // --- ANIMATION SPECIFICATIONS ---
     val infiniteTransition = rememberInfiniteTransition(label = "terminal_loops")
-    
-    // 1. Radar Scanning Grid Sweep
-    val gridScanLine by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(3500, easing = LinearEasing), RepeatMode.Restart),
-        label = "scanner"
-    )
 
-    // 2. High-Frequency Cyber Glitch Pulse for Breach Alerts
+    // High-Frequency Cyber Glitch Pulse for Breach Alerts
     val alertAlpha by infiniteTransition.animateFloat(
         initialValue = 0.2f, targetValue = 1.0f,
         animationSpec = infiniteRepeatable(tween(400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
         label = "alert_pulse"
     )
-
-    // Trigger radar sounds periodically relative to the sweep line position
-    LaunchedEffect(gridScanLine) {
-        if (gridScanLine > 0.48f && gridScanLine < 0.52f) {
-            soundManager.playScan()
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize().background(SecColor.TerminalBlack)) {
         
@@ -64,15 +50,6 @@ fun CyberSecTerminalScreen(viewModel: CyberSecViewModel = androidx.lifecycle.vie
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
-
-            // Render Animated Scanner Bar
-            val scanY = gridScanLine * h
-            drawLine(
-                color = SecColor.CyberNetGreen.copy(alpha = 0.4f),
-                start = Offset(0f, scanY),
-                end = Offset(w, scanY),
-                strokeWidth = 3f
-            )
 
             // Dynamic Target Vectors
             viewModel.trackedTargets.forEach { target ->
