@@ -31,7 +31,10 @@ class OnnxImageAnalyzer(
     private val getDigitalZoom: () -> Float,
     private val setDigitalZoom: (Float) -> Unit,
     private val getIsCaptureOn: () -> Boolean,
-    private val getCurrentProfile: () -> String = { "OUTDOOR" },
+    private val getDetectionMode: () -> DetectionMode = { DetectionMode.ALL },
+    private val getProfile: () -> TrackingProfile = { TrackingProfile.OUTDOOR },
+    private val getQualityPreset: () -> QualitySpeedPreset = { QualitySpeedPreset.BALANCED },
+    private val getLockedTrackId: () -> String? = { null },
     private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onFpsUpdated: (fps: Int) -> Unit,
@@ -132,12 +135,14 @@ class OnnxImageAnalyzer(
     }
 
     private fun reallocateBuffers(size: Int) {
-        modelInputSize = size
-        tensorBuffer = FloatBuffer.allocate(1 * 3 * size * size)
-        pixelArray = IntArray(size * size)
-        if (!letterboxBitmap.isRecycled) letterboxBitmap.recycle()
-        letterboxBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        letterboxCanvas = Canvas(letterboxBitmap)
+        synchronized(this) {
+            modelInputSize = size
+            tensorBuffer = FloatBuffer.allocate(1 * 3 * size * size)
+            pixelArray = IntArray(size * size)
+            if (!letterboxBitmap.isRecycled) letterboxBitmap.recycle()
+            letterboxBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            letterboxCanvas = Canvas(letterboxBitmap)
+        }
     }
 
     @OptIn(ExperimentalGetImage::class)
@@ -149,6 +154,11 @@ class OnnxImageAnalyzer(
         if (!getIsScanning()) {
             imageProxy.close()
             return
+        }
+
+        val qualityPreset = getQualityPreset()
+        if (qualityPreset.modelInputSize != modelInputSize) {
+            reallocateBuffers(qualityPreset.modelInputSize)
         }
 
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
@@ -171,6 +181,8 @@ class OnnxImageAnalyzer(
         } else {
             rawBitmap
         }
+        
+        VideoBuffer.addFrame(rotatedBitmap)
 
         val letterboxInfo = preprocessLetterbox(rotatedBitmap)
         val env = ortEnv ?: run {
@@ -273,7 +285,9 @@ class OnnxImageAnalyzer(
         val candidateTargets = mutableListOf<YoloTarget>()
         val srcW = sourceBitmap.width.toFloat()
         val srcH = sourceBitmap.height.toFloat()
-        val profile = getCurrentProfile().uppercase()
+        val mode = getDetectionMode()
+        val profile = getProfile()
+        val effectiveSensitivity = maxOf(profile.confidenceThreshold, sensitivityThreshold)
 
         for (i in 0 until numElements) {
             var maxScore = 0f
@@ -294,12 +308,24 @@ class OnnxImageAnalyzer(
             val rawName = labels.getOrNull(maxClassId) ?: "unknown"
             val rawLower = rawName.lowercase().trim()
 
-            // Class Whitelist Filter
-            if (profile != "ALL_OBJECTS" && rawLower !in defaultClasses) {
+            // Class Whitelist Filter based on Tracking Profile or DetectionMode
+            val isAllowed = if (profile.allowedClasses != null) {
+                rawLower in profile.allowedClasses
+            } else {
+                when (mode) {
+                    DetectionMode.ALL -> true
+                    DetectionMode.PEOPLE -> rawLower == "person"
+                    DetectionMode.VEHICLES -> rawLower in listOf("car", "truck", "bus", "motorcycle", "bicycle")
+                    DetectionMode.ANIMALS -> rawLower in listOf("bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe")
+                    DetectionMode.PLATES -> rawLower in listOf("car", "truck", "bus", "motorcycle", "plate")
+                    DetectionMode.CUSTOM -> true
+                }
+            }
+            if (!isAllowed) {
                 continue
             }
 
-            val classThreshold = maxOf(0.20f, sensitivityThreshold)
+            val classThreshold = maxOf(0.15f, effectiveSensitivity)
 
             if (maxScore >= classThreshold) {
                 val cx = if (isTransposed) buffer.get(i * numChannels + 0) else buffer.get(0 * numElements + i)
@@ -334,12 +360,7 @@ class OnnxImageAnalyzer(
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
             val h = ((target.yMax - target.yMin) * sourceBitmap.height)
 
-            val padding = when (target.rawLabel.lowercase().trim()) {
-                "person" -> 0.10f
-                "car", "bus", "truck", "motorcycle" -> 0.12f
-                "plate", "license_plate", "license plate" -> 0.04f
-                else -> 0.08f
-            }
+            val padding = profile.cropPaddingFraction
 
             val padX = w * padding
             val padY = h * padding
@@ -430,11 +451,20 @@ class OnnxImageAnalyzer(
 
         val plateTargets = mutableListOf<YoloTarget>()
 
-        // Time-Based Deterministic Plate Scanner (400 ms throttle)
-        if (nowNs - lastPlateDetectionNs >= plateIntervalNs && (getIsCaptureOn() || getAutoMag())) {
+        val profile = getProfile()
+        val qualityPreset = getQualityPreset()
+        val lockedId = getLockedTrackId()
+
+        val effectivePlateIntervalMs = minOf(profile.plateScanIntervalMs, qualityPreset.plateScanIntervalMs)
+        val effectivePlateIntervalNs = effectivePlateIntervalMs * 1_000_000L
+
+        // Time-Based Deterministic Plate Scanner (Profile & Tap-to-Lock filtering)
+        if (profile.isPlateDetectorEnabled && (nowNs - lastPlateDetectionNs >= effectivePlateIntervalNs) && (getIsCaptureOn() || getAutoMag())) {
             val vehicleCandidates = targets.filter {
                 val raw = it.rawLabel.lowercase().trim()
-                raw in listOf("car", "bus", "truck", "motorcycle") && it.crop != null && it.crop.width >= 320 && it.crop.height >= 180
+                val isVeh = raw in listOf("car", "bus", "truck", "motorcycle")
+                val isLockedMatch = (lockedId == null) || (it.id == lockedId) || activeTracks.any { trk -> trk.id == lockedId && trk.rawLabel.equals(raw, ignoreCase = true) }
+                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 200 && it.crop.height >= 120
             }
 
             val topVehicle = vehicleCandidates.maxWithOrNull(
@@ -641,17 +671,25 @@ class OnnxImageAnalyzer(
                         val conf = track.coordinateLabel.substringAfter("Z:").substringBefore("%").toFloatOrNull()?.div(100f) ?: 0.5f
                         val score = BestFrameSelector.calculateScore(bitmap, confidence = conf)
                         captureManager.processDetection(
-                            track.id,
-                            raw.uppercase(),
-                            category,
-                            bitmap,
-                            score,
-                            fullFrame,
-                            track.xMin,
-                            track.yMin,
-                            track.xMax,
-                            track.yMax,
-                            track.rawLabel
+                            id = track.id,
+                            label = raw.uppercase(),
+                            category = category,
+                            bitmap = bitmap,
+                            score = score,
+                            fullFrame = fullFrame,
+                            xMin = track.xMin,
+                            yMin = track.yMin,
+                            xMax = track.xMax,
+                            yMax = track.yMax,
+                            rawLabel = track.rawLabel,
+                            lockedTrackId = lockedId,
+                            minStableFrames = qualityPreset.minStableFrames,
+                            minSharpnessThreshold = qualityPreset.minSharpnessScore,
+                            cooldownMs = profile.captureCooldownMs,
+                            minCropWidth = qualityPreset.minCropWidth,
+                            minCropHeight = qualityPreset.minCropHeight,
+                            minPlateCropWidth = qualityPreset.minPlateCropWidth,
+                            minPlateCropHeight = qualityPreset.minPlateCropHeight
                         )
                     }
                 }
@@ -662,17 +700,25 @@ class OnnxImageAnalyzer(
                     val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
                     val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
                     captureManager.processDetection(
-                        plateId,
-                        "LICENSE PLATE",
-                        EventCategory.PLATES,
-                        bitmap,
-                        score,
-                        fullFrame,
-                        plateTarget.xMin,
-                        plateTarget.yMin,
-                        plateTarget.xMax,
-                        plateTarget.yMax,
-                        "plate"
+                        id = plateId,
+                        label = "LICENSE PLATE",
+                        category = EventCategory.PLATES,
+                        bitmap = bitmap,
+                        score = score,
+                        fullFrame = fullFrame,
+                        xMin = plateTarget.xMin,
+                        yMin = plateTarget.yMin,
+                        xMax = plateTarget.xMax,
+                        yMax = plateTarget.yMax,
+                        rawLabel = "plate",
+                        lockedTrackId = lockedId,
+                        minStableFrames = qualityPreset.minStableFrames,
+                        minSharpnessThreshold = qualityPreset.minSharpnessScore,
+                        cooldownMs = profile.captureCooldownMs,
+                        minCropWidth = qualityPreset.minCropWidth,
+                        minCropHeight = qualityPreset.minCropHeight,
+                        minPlateCropWidth = qualityPreset.minPlateCropWidth,
+                        minPlateCropHeight = qualityPreset.minPlateCropHeight
                     )
                 }
             }
@@ -682,7 +728,7 @@ class OnnxImageAnalyzer(
         val totalAnalyzerTime = System.currentTimeMillis() - startTime
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastTelemetryTime >= 1000) {
-            Log.i("OnnxImageAnalyzer", "Telemetry: input=${modelInputSize}x${modelInputSize}, inference=${System.currentTimeMillis() - startTime}ms, analyzer=${totalAnalyzerTime}ms, FPS=${frameCount}, activeTracks=${updatedTracks.size}, plateScans=${plateScansCount}, expiredTracks=${expiredTracksCount}")
+            Log.i("OnnxImageAnalyzer", "Telemetry: profile=${profile.name}, preset=${qualityPreset.name}, lockedId=${lockedId ?: "none"}, input=${modelInputSize}x${modelInputSize}, inference=${System.currentTimeMillis() - startTime}ms, analyzer=${totalAnalyzerTime}ms, FPS=${frameCount}, activeTracks=${updatedTracks.size}, plateScans=${plateScansCount}, expiredTracks=${expiredTracksCount}")
             plateScansCount = 0
             expiredTracksCount = 0
             lastTelemetryTime = nowMs

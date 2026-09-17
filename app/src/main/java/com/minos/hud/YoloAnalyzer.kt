@@ -25,6 +25,7 @@ import kotlin.math.min
 class YoloAnalyzer(
     context: Context,
     private val modelPath: String = "yolov8n.onnx",
+    var detectionMode: DetectionMode = DetectionMode.ALL,
     private val onTargetsDetected: (List<DynamicYoloBox>, Long) -> Unit
 ) : ImageAnalysis.Analyzer, AutoCloseable {
 
@@ -193,6 +194,10 @@ class YoloAnalyzer(
 
                         val label = labels.getOrNull(maxClassId) ?: "UNKNOWN"
 
+                        if (!isLabelAllowedInMode(label, detectionMode)) {
+                            continue
+                        }
+
                         candidateList.add(
                             DynamicYoloBox(
                                 label = label,
@@ -246,6 +251,18 @@ class YoloAnalyzer(
         val intersectionArea = max(0f, min(a.xMax, b.xMax) - max(a.xMin, b.xMin)) *
                 max(0f, min(a.yMax, b.yMax) - max(a.yMin, b.yMin))
         return intersectionArea / (areaA + areaB - intersectionArea)
+    }
+
+    private fun isLabelAllowedInMode(label: String, mode: DetectionMode): Boolean {
+        val l = label.lowercase()
+        return when (mode) {
+            DetectionMode.ALL -> true
+            DetectionMode.PEOPLE -> l == "person"
+            DetectionMode.VEHICLES -> l in listOf("car", "truck", "bus", "motorcycle", "bicycle")
+            DetectionMode.ANIMALS -> l in listOf("bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe")
+            DetectionMode.PLATES -> l in listOf("car", "truck", "bus", "motorcycle", "plate")
+            DetectionMode.CUSTOM -> true // Let the user configure this later
+        }
     }
 
     override fun close() {

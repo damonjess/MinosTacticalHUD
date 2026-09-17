@@ -1,13 +1,16 @@
 package com.minos.hud
 
 import androidx.camera.core.CameraControl
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,6 +32,7 @@ fun MainContent(
     previewView: PreviewView?,
     onPreviewViewCreated: (PreviewView) -> Unit,
     onHudOverlayCreated: (HUDOverlayView) -> Unit,
+    onReleaseTarget: () -> Unit,
     onLogsClick: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -49,6 +53,15 @@ fun MainContent(
                     it.isYoloBoxesEnabled = viewModel.isYoloBoxesEnabled
                     it.sensitivityThreshold = viewModel.sensitivityThreshold
                     it.activeProfile = viewModel.currentProfile
+                    it.onTargetLocked = { locked -> viewModel.isTargetLocked = locked }
+                    it.onTapFocus = { x, y ->
+                        previewView?.let { pv ->
+                            val factory = pv.meteringPointFactory
+                            val point = factory.createPoint(x, y)
+                            val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF).build()
+                            cameraControl?.startFocusAndMetering(action)
+                        }
+                    }
                     onHudOverlayCreated(it)
                 }
             },
@@ -59,6 +72,19 @@ fun MainContent(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        if (viewModel.isTargetLocked) {
+            Button(
+                onClick = { 
+                    viewModel.isTargetLocked = false
+                    onReleaseTarget()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xAAFF0033)),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp)
+            ) {
+                Text("RELEASE TARGET", color = Color.White, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+            }
+        }
 
         CaptureHUD(
             viewModel = viewModel,
@@ -122,39 +148,42 @@ fun CaptureHUD(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 40.dp, bottom = 8.dp),
+                .padding(start = 12.dp, end = 12.dp, top = 40.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "MINOS HUD",
                 color = Color(0xFF00FF9D),
-                fontSize = 24.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 IsolatedTelemetryDisplay(
                     fpsProvider = fpsProvider,
                     inferenceProvider = inferenceProvider
                 )
-                Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = onLogsClick,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF111111)),
                     shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, Color(0xFF00FF9D))
+                    border = BorderStroke(1.dp, Color(0xFF00FF9D)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                 ) {
-                    Text("LOGS ${EventRepository.events.size}", color = Color.White, fontFamily = FontFamily.Monospace)
+                    Text("LOGS ${EventRepository.events.size}", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = onSettingsClick,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF111111)),
                     shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, Color.Gray)
+                    border = BorderStroke(1.dp, Color.Gray),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                 ) {
-                    Text("SET", color = Color.White, fontFamily = FontFamily.Monospace)
+                    Text("SET", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 11.sp, maxLines = 1)
                 }
             }
         }
@@ -174,31 +203,117 @@ fun CaptureHUD(
             modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
+        // Feature 2: Tap-to-Lock Status Banner
+        if (viewModel.isTargetLocked) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .background(Color(0xCCFF0033), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "TARGET LOCKED: ${viewModel.lockedTrackId ?: "ACTIVE"}",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = "PLATE & EVENT FILTER ACTIVE",
+                    color = Color.Yellow,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Feature 1: Personal Tracking Profile Selector
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "PROFILE  •  ${viewModel.currentProfile}", color = Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text(
+                    text = "PROFILE: ${viewModel.selectedProfile.displayName.uppercase()}",
+                    color = Color(0xFF00FF9D),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
                 val motionStatus = when {
-                    viewModel.inferenceValue > 110 -> "TRACKING WEAK"
+                    viewModel.inferenceValue > 110 -> "WEAK"
                     viewModel.fpsValue in 1..11 -> "LOW FPS"
-                    else -> "TRACKING OPTIMAL"
+                    else -> "OPTIMAL"
                 }
-                Text(text = motionStatus, color = Color(0xFF00FF9D), fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                Text(text = "SYS: $motionStatus", color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row {
-                ProfileButton("INDOOR", viewModel.currentProfile == "INDOOR") { viewModel.currentProfile = "INDOOR" }
-                Spacer(modifier = Modifier.width(6.dp))
-                ProfileButton("OUTDOOR", viewModel.currentProfile == "OUTDOOR") { viewModel.currentProfile = "OUTDOOR" }
-                Spacer(modifier = Modifier.width(6.dp))
-                ProfileButton("MOVING", viewModel.currentProfile == "MOVING") { viewModel.currentProfile = "MOVING" }
-                Spacer(modifier = Modifier.width(6.dp))
-                ProfileButton("ALL", viewModel.currentProfile == "ALL_OBJECTS") { viewModel.currentProfile = "ALL_OBJECTS" }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                TrackingProfile.values().forEach { profile ->
+                    ProfileButton(
+                        text = profile.displayName.replace(" Mode", "").uppercase(),
+                        active = viewModel.selectedProfile == profile
+                    ) {
+                        viewModel.setProfile(profile)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Feature 3: Quality versus Speed Preset Switch
+        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "MODE: ${viewModel.qualityPreset.displayName.uppercase()} (${viewModel.qualityPreset.modelInputSize}x${viewModel.qualityPreset.modelInputSize})",
+                    color = Color(0xFF00E5FF),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                QualitySpeedPreset.values().forEach { preset ->
+                    Button(
+                        onClick = { viewModel.setPreset(preset) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (viewModel.qualityPreset == preset) Color(0xFF062332) else Color.Transparent
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.DarkGray),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = preset.displayName.uppercase(),
+                            color = if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.Gray,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
         }
 
@@ -210,14 +325,38 @@ fun CaptureHUD(
                 .background(Color(0xFF050C14))
                 .padding(16.dp)
         ) {
-            Text(
-                text = "LOW LIGHT — ENABLE TORCH",
-                color = Color(0xFFD4AF37),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+            // Feature 1: Torch Suggestion for Indoor / Low Light
+            if (viewModel.isTorchSuggested) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0x33D4AF37), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "TORCH SUGGESTED FOR INDOOR / LOW LIGHT",
+                        color = Color(0xFFD4AF37),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Button(
+                        onClick = {
+                            viewModel.isTorchEnabled = true
+                            cameraControl?.enableTorch(true)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD4AF37)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("ENABLE TORCH", color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = {
@@ -260,43 +399,68 @@ fun CaptureHUD(
 
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "${viewModel.trackedTargets.size} TARGETS  •  ${EventRepository.events.size} SAVED  •  CAPTURE ${if (viewModel.isCaptureOn) "ON" else "OFF"}",
+                text = "${viewModel.trackedTargets.size} TARGETS  •  ${EventRepository.events.size} SAVED  •  BEST-FRAME AUTO CAPTURE",
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(
                     onClick = { viewModel.isCaptureOn = !viewModel.isCaptureOn },
                     colors = ButtonDefaults.buttonColors(containerColor = if (viewModel.isCaptureOn) Color(0xFF008544) else Color(0xFF333333)),
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(25.dp),
-                    border = BorderStroke(1.dp, if (viewModel.isCaptureOn) Color(0xFF00FF9D) else Color.Gray)
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, if (viewModel.isCaptureOn) Color(0xFF00FF9D) else Color.Gray),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                 ) {
-                    Text(if (viewModel.isCaptureOn) "CAPTURE ON" else "CAPTURE OFF", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (viewModel.isCaptureOn) "AUTO CAPTURE ON" else "AUTO CAPTURE OFF",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = { viewModel.isScanning = !viewModel.isScanning },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(25.dp),
-                    border = BorderStroke(1.dp, Color.Gray)
-                ) {
-                    Text(if (viewModel.isScanning) "PAUSE" else "RESUME", color = Color.White, fontSize = 15.sp)
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = onLogsClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(25.dp),
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
                     border = BorderStroke(1.dp, Color.Gray),
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                 ) {
-                    Text("LOGS ${EventRepository.events.size}", color = Color.White, fontSize = 13.sp, maxLines = 1, fontFamily = FontFamily.Monospace)
+                    Text(
+                        if (viewModel.isScanning) "PAUSE SCAN" else "RESUME SCAN",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+                Button(
+                    onClick = onLogsClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A1A1A)),
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, Color.Gray),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        "LOGS ${EventRepository.events.size}",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
         }
@@ -335,9 +499,16 @@ fun ProfileButton(text: String, active: Boolean, onClick: () -> Unit) {
         colors = ButtonDefaults.buttonColors(containerColor = if (active) Color(0xFF06231A) else Color.Transparent),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, if (active) Color(0xFF00FF9D) else Color.Gray),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
     ) {
-        Text(text = text, color = if (active) Color(0xFF00FF9D) else Color.Gray)
+        Text(
+            text = text,
+            color = if (active) Color(0xFF00FF9D) else Color.Gray,
+            fontSize = 12.sp,
+            maxLines = 1,
+            softWrap = false,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }
 
@@ -346,32 +517,85 @@ fun SettingsContent(
     viewModel: MainViewModel,
     onClose: () -> Unit
 ) {
+    val profile = viewModel.selectedProfile
+    val preset = viewModel.qualityPreset
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(20.dp)
     ) {
         Text(
-            "SYSTEM SENSITIVITY // SCANNER CALIBRATION",
+            "SYSTEM CONFIGURATION & CALIBRATION",
             color = Color(0xFF00E5FF),
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Profile Parameters Display
+        Text(
+            "ACTIVE PROFILE PARAMETERS (${profile.displayName})",
+            color = Color(0xFF00FF9D),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0A1926), RoundedCornerShape(8.dp))
+                .padding(10.dp)
+        ) {
+            Text("• Model Input Size: ${profile.modelInputSize}x${profile.modelInputSize}", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Confidence Threshold: ${(profile.confidenceThreshold * 100).toInt()}%", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Plate Scan Interval: ${profile.plateScanIntervalMs}ms", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Box Smoothing Factor: ${String.format("%.2f", profile.boxSmoothingAlpha)}", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Capture Cooldown: ${profile.captureCooldownMs / 1000}s", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Crop Padding: ${(profile.cropPaddingFraction * 100).toInt()}%", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Plate Detector Enabled: ${if (profile.isPlateDetectorEnabled) "YES" else "NO"}", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Quality / Speed Switch Parameters
+        Text(
+            "QUALITY VS SPEED PRESET (${preset.displayName})",
+            color = Color(0xFF00E5FF),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0A1926), RoundedCornerShape(8.dp))
+                .padding(10.dp)
+        ) {
+            Text("• Main Detector: ${preset.modelInputSize}x${preset.modelInputSize}", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Scan Rate: ${preset.plateScanIntervalMs}ms", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Min Target Crop: ${preset.minCropWidth}x${preset.minCropHeight}px", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Min Sharpness Score: ${String.format("%.2f", preset.minSharpnessScore)}", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+            Text("• Required Observations: ${preset.minStableFrames} consecutive frames", color = Color.LightGray, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "SCANNER SENSITIVITY",
+                "SENSITIVITY OVERRIDE",
                 color = Color.White,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 modifier = Modifier.weight(1f)
             )
             Text(
                 "${(viewModel.sensitivityThreshold * 100).toInt()}%",
                 color = Color(0xFF00FF66),
                 fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp
+                fontSize = 11.sp
             )
         }
         Slider(
@@ -384,13 +608,14 @@ fun SettingsContent(
                 inactiveTrackColor = Color(0xFF00FF66).copy(alpha = 0.2f)
             )
         )
-        Spacer(modifier = Modifier.height(12.dp))
+
+        Spacer(modifier = Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "RENDER TARGET BOUNDING BOXES",
+                "RENDER BOUNDING BOXES",
                 color = Color.White,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 modifier = Modifier.weight(1f)
             )
             Switch(
@@ -402,7 +627,8 @@ fun SettingsContent(
                 )
             )
         }
-        Spacer(modifier = Modifier.height(16.dp))
+
+        Spacer(modifier = Modifier.height(12.dp))
         Button(
             onClick = onClose,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF008544)),

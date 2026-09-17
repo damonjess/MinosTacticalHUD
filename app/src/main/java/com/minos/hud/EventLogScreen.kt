@@ -2,6 +2,7 @@ package com.minos.hud
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -36,14 +37,19 @@ import androidx.compose.ui.window.DialogProperties
 fun EventLogScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
     val events = EventRepository.events
     var viewingEvent by remember { mutableStateOf<DetectedEvent?>(null) }
 
-    val filteredEvents = when (selectedTab) {
-        0 -> events.filter { it.category == EventCategory.PEOPLE_VEHICLES }
-        1 -> events.filter { it.category == EventCategory.ANIMALS }
-        2 -> events.filter { it.category == EventCategory.PLATES }
-        else -> events
+    val filteredEvents = events.filter { event ->
+        val matchTab = when (selectedTab) {
+            0 -> event.category == EventCategory.PEOPLE_VEHICLES
+            1 -> event.category == EventCategory.ANIMALS
+            2 -> event.category == EventCategory.PLATES
+            else -> true
+        }
+        val matchSearch = searchQuery.isBlank() || event.label.contains(searchQuery, ignoreCase = true)
+        matchTab && matchSearch
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color(0xFF010408))) {
@@ -99,7 +105,23 @@ fun EventLogScreen(onBack: () -> Unit) {
                 LogTab("PEOPLE (${events.count { it.category == EventCategory.PEOPLE_VEHICLES }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
                 LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
                 LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
+                LogTab("ALL (${events.size})", selectedTab == 3, Modifier.weight(1f)) { selectedTab = 3 }
             }
+
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = { Text("Search by label...", color = Color.Gray, fontFamily = FontFamily.Monospace) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                textStyle = LocalTextStyle.current.copy(color = Color.White, fontFamily = FontFamily.Monospace),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = Color(0xFF05101A),
+                    unfocusedContainerColor = Color(0xFF05101A),
+                    focusedIndicatorColor = Color(0xFF00FF9D),
+                    unfocusedIndicatorColor = Color(0xFF102A3E)
+                ),
+                singleLine = true
+            )
 
             // List
             if (filteredEvents.isEmpty()) {
@@ -296,6 +318,7 @@ fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
 
 @Composable
 fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete: () -> Unit) {
+    val context = LocalContext.current
     val fullBitmap = remember(event.id) {
         // Prefer fullImagePath (full_<id>.jpg) for the high-res crop viewer.
         // Fall back to thumbnailPath only if fullImagePath cannot be decoded.
@@ -359,6 +382,17 @@ fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    // Metadata
+                    Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                        Text("CONFIDENCE: ${(event.confidence * 100).toInt()}%", color = Color(0xFF00FF9D), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        Text("TRACKED: ${event.framesTracked} frames", color = Color(0xFF00A8FF), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        Text("IMAGE QUALITY: ${event.sharpnessScore}", color = Color.Gray, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        Text("MODE: ${event.detectionMode.name}", color = Color.Gray, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        if (event.videoClipPath != null) {
+                            Text("CLIP: Available", color = Color(0xFF00FF9D), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        }
+                    }
+
                     // Image Display Frame
                     Box(
                         modifier = Modifier
@@ -392,7 +426,20 @@ fun FullImageDossierDialog(event: DetectedEvent, onDismiss: () -> Unit, onDelete
                         ) {
                             Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("DELETE EVENT", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                            Text("DELETE", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = { 
+                                val file = EventRepository.exportSelectedToZip(context, listOf(event))
+                                if (file != null) {
+                                    Toast.makeText(context, "Exported to ${file.name}", Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0055AA)),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("EXPORT", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }
 
                         Button(

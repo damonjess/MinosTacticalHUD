@@ -2,49 +2,87 @@ package com.minos.hud
 
 import android.content.Context
 import android.graphics.Bitmap
+import java.io.File
+import java.io.FileOutputStream
+import java.util.UUID
 import kotlin.math.abs
 
 object BestFrameSelector {
     
-    fun calculateScore(
-        bitmap: Bitmap,
-        confidence: Float = 0.5f,
-        xMin: Float = 0f,
-        yMin: Float = 0f,
-        xMax: Float = 1f,
-        yMax: Float = 1f
-    ): Float {
+    /**
+     * Checks if the crop exposure is within acceptable bounds.
+     * Rejects overexposed (blown out white) or underexposed (pitch black) frames.
+     */
+    fun checkExposure(bitmap: Bitmap): Boolean {
         val width = bitmap.width
         val height = bitmap.height
-        
-        val left = (xMin * width).toInt().coerceIn(0, width - 1)
-        val top = (yMin * height).toInt().coerceIn(0, height - 1)
-        val right = (xMax * width).toInt().coerceIn(left + 1, width)
-        val bottom = (yMax * height).toInt().coerceIn(top + 1, height)
-        
-        val targetWidth = right - left
-        val targetHeight = bottom - top
-        
-        if (targetWidth < 10 || targetHeight < 10) return 0f
+        if (width < 5 || height < 5) return false
 
-        val step = maxOf(1, minOf(targetWidth, targetHeight) / 20)
+        val step = maxOf(1, minOf(width, height) / 25)
+        var totalLum = 0L
+        var sampleCount = 0
+        var darkCount = 0
+        var blownCount = 0
+
+        try {
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            for (y in 0 until height step step) {
+                val rowOffset = y * width
+                for (x in 0 until width step step) {
+                    val pixel = pixels[rowOffset + x]
+                    val r = (pixel shr 16) and 0xFF
+                    val g = (pixel shr 8) and 0xFF
+                    val b = pixel and 0xFF
+                    val lum = (r * 0.299f + g * 0.587f + b * 0.114f).toInt()
+
+                    totalLum += lum
+                    sampleCount++
+                    if (lum < 15) darkCount++
+                    if (lum > 240) blownCount++
+                }
+            }
+        } catch (e: Exception) {
+            return false
+        }
+
+        if (sampleCount == 0) return false
+
+        val avgLum = totalLum.toFloat() / sampleCount
+        val darkRatio = darkCount.toFloat() / sampleCount
+        val blownRatio = blownCount.toFloat() / sampleCount
+
+        // Reject severe underexposure (<20) or overexposure (>235), or extreme clipping
+        return avgLum in 20.0f..235.0f && darkRatio < 0.40f && blownRatio < 0.40f
+    }
+
+    /**
+     * Calculates relative edge detail / sharpness score (0.0 to 1.0).
+     */
+    fun calculateSharpnessScore(bitmap: Bitmap): Float {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width < 10 || height < 10) return 0f
+
+        val step = maxOf(1, minOf(width, height) / 30)
         var detailSum = 0f
         var count = 0
-        
-        try {
-            val pixels = IntArray(targetWidth * targetHeight)
-            bitmap.getPixels(pixels, 0, targetWidth, left, top, targetWidth, targetHeight)
 
-            for (y in 0 until targetHeight step step) {
+        try {
+            val pixels = IntArray(width * height)
+            bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+            for (y in 0 until height step step) {
                 var prevLum = -1
-                val rowOffset = y * targetWidth
-                for (x in 0 until targetWidth step step) {
+                val rowOffset = y * width
+                for (x in 0 until width step step) {
                     val pixel = pixels[rowOffset + x]
-                    val red = (pixel shr 16) and 0xFF
-                    val green = (pixel shr 8) and 0xFF
-                    val blue = pixel and 0xFF
-                    val lum = (red * 0.299f + green * 0.587f + blue * 0.114f).toInt()
-                    
+                    val r = (pixel shr 16) and 0xFF
+                    val g = (pixel shr 8) and 0xFF
+                    val b = pixel and 0xFF
+                    val lum = (r * 0.299f + g * 0.587f + b * 0.114f).toInt()
+
                     if (prevLum != -1) {
                         detailSum += abs(lum - prevLum)
                     }
@@ -57,12 +95,23 @@ object BestFrameSelector {
         }
 
         if (count == 0) return 0f
-        
         val avgDetail = detailSum / count
-        val sharpnessScore = minOf(1f, avgDetail / 40f)
+        return (avgDetail / 40f).coerceIn(0f, 1f)
+    }
+
+    fun calculateScore(
+        bitmap: Bitmap,
+        confidence: Float = 0.5f,
+        xMin: Float = 0f,
+        yMin: Float = 0f,
+        xMax: Float = 1f,
+        yMax: Float = 1f
+    ): Float {
+        val sharpnessScore = calculateSharpnessScore(bitmap)
+        val isExposureGood = if (checkExposure(bitmap)) 1.0f else 0.2f
         val sizeScore = minOf(1f, bitmap.width.toFloat() / 600f)
 
-        return sharpnessScore * 0.60f + confidence * 0.25f + sizeScore * 0.15f
+        return (sharpnessScore * 0.50f + confidence * 0.25f + sizeScore * 0.15f + isExposureGood * 0.10f).coerceIn(0f, 1f)
     }
 
     fun cropDetection(
@@ -121,7 +170,6 @@ class CaptureManager(
     private val pendingCaptures = mutableMapOf<String, BestFrame>()
     private val capturedIds = mutableMapOf<String, Long>()
     private val isCapturing = mutableSetOf<String>()
-    private val captureCooldown = 8000L // 8 seconds cooldown per target
 
     data class BestFrame(
         val bitmap: Bitmap,
@@ -150,21 +198,47 @@ class CaptureManager(
         yMin: Float = 0f,
         xMax: Float = 1f,
         yMax: Float = 1f,
-        rawLabel: String = ""
+        rawLabel: String = "",
+        lockedTrackId: String? = null,
+        minStableFrames: Int = 5,
+        minSharpnessThreshold: Float = 0.30f,
+        cooldownMs: Long = 8000L,
+        minCropWidth: Int = 160,
+        minCropHeight: Int = 160,
+        minPlateCropWidth: Int = 100,
+        minPlateCropHeight: Int = 30
     ) {
+        // Feature 2: Tap-to-lock filtering - if a target is locked, ignore captures for other targets
+        if (lockedTrackId != null && !id.startsWith(lockedTrackId) && !lockedTrackId.startsWith(id)) {
+            return
+        }
+
         val raw = (if (rawLabel.isNotEmpty()) rawLabel else label).lowercase().trim()
-        
-        // Reject crops that are too small before saving or processing
-        val tooSmall = when (raw) {
-            "plate", "license_plate", "license plate" -> bitmap.width < 100 || bitmap.height < 30
-            else -> bitmap.width < 160 || bitmap.height < 160
+        val isPlate = raw in listOf("plate", "license_plate", "license plate")
+
+        // Feature 4 Rule 3: Minimum crop size check
+        val tooSmall = if (isPlate) {
+            bitmap.width < minPlateCropWidth || bitmap.height < minPlateCropHeight
+        } else {
+            bitmap.width < minCropWidth || bitmap.height < minCropHeight
         }
         if (tooSmall) return
 
+        // Feature 4 Rule 5: Exposure problem check
+        if (!BestFrameSelector.checkExposure(bitmap)) {
+            return
+        }
+
+        // Feature 4 Rule 4: Sharpness threshold check
+        val sharpnessScore = BestFrameSelector.calculateSharpnessScore(bitmap)
+        if (sharpnessScore < minSharpnessThreshold) {
+            return
+        }
+
         val now = System.currentTimeMillis()
         
-        // Cooldown check
-        if (capturedIds[id] != null && now - capturedIds[id]!! < captureCooldown) return
+        // Feature 4 Rule 6: Target cooldown check
+        if (capturedIds[id] != null && now - capturedIds[id]!! < cooldownMs) return
         if (isCapturing.contains(id)) return
 
         val current = pendingCaptures[id]
@@ -177,7 +251,7 @@ class CaptureManager(
         } else {
             current.frameCount++
             current.stableFrames++
-            // If the new frame is sharper/better quality, replace the stored one
+            // If the new frame is sharper/better quality, replace the stored one (Best-frame selection)
             if (score > current.score) {
                 val copy = try { bitmap.copy(config, false) } catch (e: Exception) { null } ?: return
                 val fullCopy = try { fullFrame?.copy(config, false) } catch (e: Exception) { null }
@@ -207,10 +281,13 @@ class CaptureManager(
                 )
             }
             
-            // Require stable observations (>=8 frames or >900ms) before committing capture to storage
-            if (current.frameCount >= 8 || now - current.firstSeen > 900) {
+            // Feature 4 Rule 1: Require same target detected for at least N frames (minStableFrames, default 5)
+            if (current.frameCount >= minStableFrames || now - current.firstSeen > 900) {
                 val best = pendingCaptures.remove(id) ?: return
                 capturedIds[id] = now
+
+                // Grab recent frames for clip
+                val framesForClip = VideoBuffer.getRecentFrames()
 
                 val trigger = onTriggerHighResCapture
                 val padding = BestFrameSelector.getPaddingForLabel(best.rawLabel.ifEmpty { best.label })
@@ -219,18 +296,51 @@ class CaptureManager(
                     isCapturing.add(id)
                     trigger(best.xMin, best.yMin, best.xMax, best.yMax, padding) { highResCrop ->
                         isCapturing.remove(id)
-                        if (highResCrop != null) {
-                            EventRepository.saveEvent(context, best.label, best.category, highResCrop, highResCrop)
-                            best.bitmap.recycle()
-                            best.fullFrame?.recycle()
-                        } else {
-                            EventRepository.saveEvent(context, best.label, best.category, best.bitmap, best.fullFrame)
-                        }
+                        saveEventWithClip(context, best.label, best.category, highResCrop ?: best.bitmap, highResCrop ?: best.fullFrame, framesForClip, best.score, best.frameCount)
+                        best.bitmap.recycle()
+                        best.fullFrame?.recycle()
                     }
                 } else {
-                    EventRepository.saveEvent(context, best.label, best.category, best.bitmap, best.fullFrame)
+                    saveEventWithClip(context, best.label, best.category, best.bitmap, best.fullFrame, framesForClip, best.score, best.frameCount)
+                    best.bitmap.recycle()
+                    best.fullFrame?.recycle()
                 }
             }
         }
+    }
+    
+    private fun saveEventWithClip(
+        context: Context, label: String, category: EventCategory, 
+        crop: Bitmap, fullFrame: Bitmap?, framesForClip: List<Bitmap>,
+        score: Float, frameCount: Int
+    ) {
+        val eventDir = File(context.filesDir, "events")
+        if (!eventDir.exists()) eventDir.mkdirs()
+        
+        var clipPath: String? = null
+        if (framesForClip.isNotEmpty()) {
+            val clipDir = File(eventDir, "clip_${UUID.randomUUID()}")
+            clipDir.mkdirs()
+            clipPath = clipDir.absolutePath
+            for ((idx, bmp) in framesForClip.withIndex()) {
+                val f = File(clipDir, String.format("frame_%03d.jpg", idx))
+                FileOutputStream(f).use { out ->
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                }
+                bmp.recycle()
+            }
+        }
+
+        EventRepository.saveEvent(
+            context = context,
+            label = label,
+            category = category,
+            bitmap = crop,
+            fullFrame = fullFrame,
+            confidence = score,
+            sharpnessScore = "Good",
+            framesTracked = frameCount,
+            videoClipPath = clipPath
+        )
     }
 }

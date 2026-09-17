@@ -28,12 +28,41 @@ class MainViewModel : ViewModel() {
     var currentScreen by mutableStateOf(Screen.HUD)
 
     var isCaptureOn by mutableStateOf(true)
+    var selectedProfile by mutableStateOf(TrackingProfile.OUTDOOR)
     var currentProfile by mutableStateOf("OUTDOOR")
+    var qualityPreset by mutableStateOf(QualitySpeedPreset.BALANCED)
+    var detectionMode by mutableStateOf(DetectionMode.ALL)
     var exposureValue by mutableFloatStateOf(0f)
+    var isTargetLocked by mutableStateOf(false)
+    var lockedTrackId by mutableStateOf<String?>(null)
     var isTorchEnabled by mutableStateOf(false)
     var modelLoadError by mutableStateOf<String?>(null)
 
+    val isTorchSuggested: Boolean
+        get() = selectedProfile.suggestTorch && !isTorchEnabled
+
     val trackedTargets = mutableStateListOf<MagTrackTarget>()
+
+    fun setProfile(profile: TrackingProfile) {
+        selectedProfile = profile
+        currentProfile = profile.name
+        sensitivityThreshold = profile.confidenceThreshold
+        detectionMode = profile.detectionMode
+    }
+
+    fun setPreset(preset: QualitySpeedPreset) {
+        qualityPreset = preset
+    }
+
+    fun lockTarget(trackId: String?) {
+        lockedTrackId = trackId
+        isTargetLocked = trackId != null
+    }
+
+    fun releaseLock() {
+        lockedTrackId = null
+        isTargetLocked = false
+    }
 
     fun updateMetrics(fps: Int, inferenceMs: Long) {
         fpsValue = fps

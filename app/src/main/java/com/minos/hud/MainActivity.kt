@@ -75,7 +75,10 @@ class MainActivity : ComponentActivity() {
                 cameraControl?.setZoomRatio(newZoom)
             },
             getIsCaptureOn = { viewModel.isCaptureOn },
-            getCurrentProfile = { viewModel.currentProfile },
+            getDetectionMode = { viewModel.detectionMode },
+            getProfile = { viewModel.selectedProfile },
+            getQualityPreset = { viewModel.qualityPreset },
+            getLockedTrackId = { viewModel.lockedTrackId },
             onTriggerHighResCapture = { xMin, yMin, xMax, yMax, padding, onCaptured ->
                 val capture = imageCapture
                 if (capture != null) {
@@ -169,6 +172,11 @@ class MainActivity : ComponentActivity() {
                         },
                         onHudOverlayCreated = { overlay ->
                             hudOverlay = overlay
+                            overlay.onTargetLockedId = { trackId -> viewModel.lockTarget(trackId) }
+                        },
+                        onReleaseTarget = {
+                            hudOverlay?.releaseTarget()
+                            viewModel.releaseLock()
                         },
                         onLogsClick = { viewModel.currentScreen = Screen.EVENT_LOG }
                     )
