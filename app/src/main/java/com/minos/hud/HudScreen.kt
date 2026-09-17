@@ -340,7 +340,8 @@ fun CaptureHUD(
                         color = Color(0xFFD4AF37),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.weight(1f)
                     )
                     Button(
                         onClick = {

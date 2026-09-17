@@ -123,7 +123,9 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
 
                         val plateCrop = try {
                             val raw = Bitmap.createBitmap(vehicleBitmap, pLeft, pTop, pWidth, pHeight)
-                            raw.copy(Bitmap.Config.ARGB_8888, false)
+                            val result = raw.copy(Bitmap.Config.ARGB_8888, false)
+                            raw.recycle()
+                            result
                         } catch (e: Exception) { null }
 
                         if (plateCrop != null) {

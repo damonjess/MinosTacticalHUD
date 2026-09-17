@@ -2,6 +2,7 @@ package com.minos.hud
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -206,7 +207,10 @@ object EventRepository {
     }
 
     fun exportSelectedToZip(context: Context, selectedEvents: List<DetectedEvent>): File? {
-        val exportDir = File(context.cacheDir, "exports")
+        val exportDir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            "MinosExports"
+        )
         if (!exportDir.exists()) exportDir.mkdirs()
         
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())

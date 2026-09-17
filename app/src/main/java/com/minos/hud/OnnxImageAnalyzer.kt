@@ -50,8 +50,12 @@ class OnnxImageAnalyzer(
     private val captureManager = CaptureManager(context, onTriggerHighResCapture)
     private val captureExecutor = Executors.newSingleThreadExecutor()
 
+    companion object {
+        private const val MODEL_INPUT_SIZE = 320
+    }
+
     // Pre-allocated reusable buffers to eliminate Garbage Collection churn
-    private var modelInputSize = 512
+    private var modelInputSize = MODEL_INPUT_SIZE
     private var tensorBuffer: FloatBuffer = FloatBuffer.allocate(1 * 3 * modelInputSize * modelInputSize)
     private var pixelArray = IntArray(modelInputSize * modelInputSize)
     private var letterboxBitmap: Bitmap = Bitmap.createBitmap(modelInputSize, modelInputSize, Bitmap.Config.ARGB_8888)
@@ -124,7 +128,7 @@ class OnnxImageAnalyzer(
                 }
                 ortSession = session
 
-                modelInputSize = 640
+                modelInputSize = 320
                 reallocateBuffers(modelInputSize)
             }
         } catch (e: Exception) {
@@ -380,7 +384,9 @@ class OnnxImageAnalyzer(
             val crop = if (needsCrop) {
                 try {
                     val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
-                    cropped.copy(Bitmap.Config.ARGB_8888, false)
+                    val result = cropped.copy(Bitmap.Config.ARGB_8888, false)
+                    cropped.recycle()
+                    result
                 } catch (e: Exception) {
                     null
                 }
@@ -529,8 +535,8 @@ class OnnxImageAnalyzer(
                 val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
                 val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
 
-                val newVx = 0.70f * measuredVx + 0.30f * matchedTrack.vx
-                val newVy = 0.70f * measuredVy + 0.30f * matchedTrack.vy
+                val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
+                val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
 
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
@@ -593,8 +599,8 @@ class OnnxImageAnalyzer(
                 val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
                 val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
 
-                val newVx = 0.70f * measuredVx + 0.30f * matchedTrack.vx
-                val newVy = 0.70f * measuredVy + 0.30f * matchedTrack.vy
+                val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
+                val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
 
                 val updatedTrack = matchedTrack.copy(
                     rawLabel = matchedTarget.rawLabel,
@@ -669,57 +675,65 @@ class OnnxImageAnalyzer(
                 if (category != null) {
                     track.crop?.let { bitmap ->
                         val conf = track.coordinateLabel.substringAfter("Z:").substringBefore("%").toFloatOrNull()?.div(100f) ?: 0.5f
-                        val score = BestFrameSelector.calculateScore(bitmap, confidence = conf)
-                        captureManager.processDetection(
-                            id = track.id,
-                            label = raw.uppercase(),
-                            category = category,
-                            bitmap = bitmap,
-                            score = score,
-                            fullFrame = fullFrame,
-                            xMin = track.xMin,
-                            yMin = track.yMin,
-                            xMax = track.xMax,
-                            yMax = track.yMax,
-                            rawLabel = track.rawLabel,
-                            lockedTrackId = lockedId,
-                            minStableFrames = qualityPreset.minStableFrames,
-                            minSharpnessThreshold = qualityPreset.minSharpnessScore,
-                            cooldownMs = profile.captureCooldownMs,
-                            minCropWidth = qualityPreset.minCropWidth,
-                            minCropHeight = qualityPreset.minCropHeight,
-                            minPlateCropWidth = qualityPreset.minPlateCropWidth,
-                            minPlateCropHeight = qualityPreset.minPlateCropHeight
-                        )
+                        captureExecutor.execute {
+                            if (!bitmap.isRecycled) {
+                                val score = BestFrameSelector.calculateScore(bitmap, confidence = conf)
+                                captureManager.processDetection(
+                                    id = track.id,
+                                    label = raw.uppercase(),
+                                    category = category,
+                                    bitmap = bitmap,
+                                    score = score,
+                                    fullFrame = fullFrame,
+                                    xMin = track.xMin,
+                                    yMin = track.yMin,
+                                    xMax = track.xMax,
+                                    yMax = track.yMax,
+                                    rawLabel = track.rawLabel,
+                                    lockedTrackId = lockedId,
+                                    minStableFrames = qualityPreset.minStableFrames,
+                                    minSharpnessThreshold = qualityPreset.minSharpnessScore,
+                                    cooldownMs = profile.captureCooldownMs,
+                                    minCropWidth = qualityPreset.minCropWidth,
+                                    minCropHeight = qualityPreset.minCropHeight,
+                                    minPlateCropWidth = qualityPreset.minPlateCropWidth,
+                                    minPlateCropHeight = qualityPreset.minPlateCropHeight
+                                )
+                            }
+                        }
                     }
                 }
             }
             
             plateTargets.forEach { plateTarget ->
                 plateTarget.crop?.let { bitmap ->
-                    val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
-                    val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
-                    captureManager.processDetection(
-                        id = plateId,
-                        label = "LICENSE PLATE",
-                        category = EventCategory.PLATES,
-                        bitmap = bitmap,
-                        score = score,
-                        fullFrame = fullFrame,
-                        xMin = plateTarget.xMin,
-                        yMin = plateTarget.yMin,
-                        xMax = plateTarget.xMax,
-                        yMax = plateTarget.yMax,
-                        rawLabel = "plate",
-                        lockedTrackId = lockedId,
-                        minStableFrames = qualityPreset.minStableFrames,
-                        minSharpnessThreshold = qualityPreset.minSharpnessScore,
-                        cooldownMs = profile.captureCooldownMs,
-                        minCropWidth = qualityPreset.minCropWidth,
-                        minCropHeight = qualityPreset.minCropHeight,
-                        minPlateCropWidth = qualityPreset.minPlateCropWidth,
-                        minPlateCropHeight = qualityPreset.minPlateCropHeight
-                    )
+                    captureExecutor.execute {
+                        if (!bitmap.isRecycled) {
+                            val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
+                            val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
+                            captureManager.processDetection(
+                                id = plateId,
+                                label = "LICENSE PLATE",
+                                category = EventCategory.PLATES,
+                                bitmap = bitmap,
+                                score = score,
+                                fullFrame = fullFrame,
+                                xMin = plateTarget.xMin,
+                                yMin = plateTarget.yMin,
+                                xMax = plateTarget.xMax,
+                                yMax = plateTarget.yMax,
+                                rawLabel = "plate",
+                                lockedTrackId = lockedId,
+                                minStableFrames = qualityPreset.minStableFrames,
+                                minSharpnessThreshold = qualityPreset.minSharpnessScore,
+                                cooldownMs = profile.captureCooldownMs,
+                                minCropWidth = qualityPreset.minCropWidth,
+                                minCropHeight = qualityPreset.minCropHeight,
+                                minPlateCropWidth = qualityPreset.minPlateCropWidth,
+                                minPlateCropHeight = qualityPreset.minPlateCropHeight
+                            )
+                        }
+                    }
                 }
             }
         }

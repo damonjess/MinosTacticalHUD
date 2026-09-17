@@ -40,7 +40,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     private lateinit var cameraExecutor: ExecutorService
-    private var cameraControl: CameraControl? = null
+    private var cameraControl by mutableStateOf<CameraControl?>(null)
     private var cameraInfo: CameraInfo? = null
     private var imageCapture: ImageCapture? = null
 
