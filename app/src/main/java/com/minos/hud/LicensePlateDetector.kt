@@ -94,7 +94,7 @@ class LicensePlateDetector(context: Context) : AutoCloseable {
             
             val numBoxes = shape[1].toInt()
             val numFeatures = shape[2].toInt()
-            var maxConf = 0.52f
+            var maxConf = 0.35f
 
             for (i in 0 until numBoxes) {
                 val offset = i * numFeatures

@@ -59,13 +59,13 @@ enum class TrackingProfile(
         displayName = "Vehicle Mode",
         description = "Cars, trucks, motorcycles, plates. Faster tracking. Plate detector enabled.",
         modelInputSize = 640,
-        confidenceThreshold = 0.45f,
+        confidenceThreshold = 0.35f,
         detectionMode = DetectionMode.VEHICLES,
         allowedClasses = setOf("car", "truck", "bus", "motorcycle", "bicycle", "plate"),
         plateScanIntervalMs = 250L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 5000L,
-        cropPaddingFraction = 0.40f,
+        cropPaddingFraction = 0.12f,
         isPlateDetectorEnabled = true,
         suggestTorch = false
     ),
@@ -79,7 +79,7 @@ enum class TrackingProfile(
         plateScanIntervalMs = 2000L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 8000L,
-        cropPaddingFraction = 0.40f,
+        cropPaddingFraction = 0.10f,
         isPlateDetectorEnabled = false,
         suggestTorch = false
     ),
@@ -87,13 +87,13 @@ enum class TrackingProfile(
         displayName = "Indoor Mode",
         description = "Person and selected objects. Torch suggestion. Lower clutter.",
         modelInputSize = 640,
-        confidenceThreshold = 0.55f,
+        confidenceThreshold = 0.40f,
         detectionMode = DetectionMode.CUSTOM,
         allowedClasses = setOf("person", "chair", "couch", "tv", "laptop", "cell phone", "bottle", "cup", "book", "clock", "potted plant"),
         plateScanIntervalMs = 3000L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 10000L,
-        cropPaddingFraction = 0.40f,
+        cropPaddingFraction = 0.10f,
         isPlateDetectorEnabled = false,
         suggestTorch = true
     ),
@@ -107,7 +107,7 @@ enum class TrackingProfile(
         plateScanIntervalMs = 400L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 8000L,
-        cropPaddingFraction = 0.40f,
+        cropPaddingFraction = 0.10f,
         isPlateDetectorEnabled = true,
         suggestTorch = false
     ),
@@ -121,7 +121,7 @@ enum class TrackingProfile(
         plateScanIntervalMs = 300L,
         boxSmoothingAlpha = 0.85f,
         captureCooldownMs = 5000L,
-        cropPaddingFraction = 0.40f,
+        cropPaddingFraction = 0.12f,
         isPlateDetectorEnabled = true,
         suggestTorch = false
     )
@@ -145,8 +145,8 @@ enum class QualitySpeedPreset(
 ) {
     PERFORMANCE(
         displayName = "Performance",
-        description = "320x320 main detector. Plate detection every 600ms. Minimal crop creation. Responsive tracking.",
-        modelInputSize = 320,
+        description = "640x640 main detector. Plate detection every 600ms. Minimal crop creation. Responsive tracking.",
+        modelInputSize = 640,
         plateScanIntervalMs = 600L,
         minCropWidth = 120,
         minCropHeight = 120,

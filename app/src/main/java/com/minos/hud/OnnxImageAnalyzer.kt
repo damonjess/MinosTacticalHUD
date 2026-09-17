@@ -51,7 +51,7 @@ class OnnxImageAnalyzer(
     private val captureExecutor = Executors.newSingleThreadExecutor()
 
     companion object {
-        private const val MODEL_INPUT_SIZE = 320
+        private const val MODEL_INPUT_SIZE = 640
     }
 
     // Pre-allocated reusable buffers to eliminate Garbage Collection churn
@@ -128,7 +128,7 @@ class OnnxImageAnalyzer(
                 }
                 ortSession = session
 
-                modelInputSize = 320
+                modelInputSize = 640
                 reallocateBuffers(modelInputSize)
             }
         } catch (e: Exception) {
@@ -364,7 +364,7 @@ class OnnxImageAnalyzer(
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
             val h = ((target.yMax - target.yMin) * sourceBitmap.height)
 
-            val padding = profile.cropPaddingFraction
+            val padding = BestFrameSelector.getPaddingForLabel(target.rawLabel)
 
             val padX = w * padding
             val padY = h * padding

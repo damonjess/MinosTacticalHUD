@@ -153,8 +153,13 @@ object BestFrameSelector {
         )
     }
 
-    fun getPaddingForLabel(@Suppress("UNUSED_PARAMETER") label: String): Float {
-        return 0.40f
+    fun getPaddingForLabel(label: String): Float {
+        return when (label.lowercase().trim()) {
+            "person" -> 0.10f
+            "car", "truck", "bus", "motorcycle", "vehicle" -> 0.12f
+            "plate", "license_plate", "license plate" -> 0.04f
+            else -> 0.08f
+        }
     }
 }
 

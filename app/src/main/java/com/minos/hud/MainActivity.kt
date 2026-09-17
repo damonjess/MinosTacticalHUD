@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var cameraExecutor: ExecutorService
     private var cameraControl by mutableStateOf<CameraControl?>(null)
-    private var cameraInfo: CameraInfo? = null
+    private var cameraInfo by mutableStateOf<CameraInfo?>(null)
     private var imageCapture: ImageCapture? = null
 
     private var hudOverlay: HUDOverlayView? = null
@@ -163,6 +163,7 @@ class MainActivity : ComponentActivity() {
                     Screen.HUD -> MainContent(
                         viewModel = viewModel,
                         cameraControl = cameraControl,
+                        cameraInfo = cameraInfo,
                         previewView = previewView,
                         onPreviewViewCreated = { view ->
                             previewView = view

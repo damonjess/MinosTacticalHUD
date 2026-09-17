@@ -1,6 +1,8 @@
 package com.minos.hud
 
+import android.util.Log
 import androidx.camera.core.CameraControl
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
@@ -29,12 +31,40 @@ import androidx.compose.ui.viewinterop.AndroidView
 fun MainContent(
     viewModel: MainViewModel,
     cameraControl: CameraControl?,
+    cameraInfo: CameraInfo?,
     previewView: PreviewView?,
     onPreviewViewCreated: (PreviewView) -> Unit,
     onHudOverlayCreated: (HUDOverlayView) -> Unit,
     onReleaseTarget: () -> Unit,
     onLogsClick: () -> Unit
 ) {
+    val expState = cameraInfo?.exposureState
+    val isExpSupported = expState?.isExposureCompensationSupported == true
+    val expRange = expState?.exposureCompensationRange
+    val minExpIndex = expRange?.lower ?: -4
+    val maxExpIndex = expRange?.upper ?: 4
+
+    LaunchedEffect(cameraControl, viewModel.isTorchEnabled) {
+        if (cameraControl != null) {
+            try {
+                cameraControl.enableTorch(viewModel.isTorchEnabled)
+            } catch (e: Exception) {
+                Log.e("MainContent", "Error enabling torch", e)
+            }
+        }
+    }
+
+    LaunchedEffect(cameraControl, viewModel.exposureValue) {
+        if (cameraControl != null && isExpSupported) {
+            try {
+                val index = viewModel.exposureValue.toInt().coerceIn(minExpIndex, maxExpIndex)
+                cameraControl.setExposureCompensationIndex(index)
+            } catch (e: Exception) {
+                Log.e("MainContent", "Error setting exposure index", e)
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
@@ -89,6 +119,7 @@ fun MainContent(
         CaptureHUD(
             viewModel = viewModel,
             cameraControl = cameraControl,
+            cameraInfo = cameraInfo,
             fpsProvider = { viewModel.fpsValue },
             inferenceProvider = { viewModel.inferenceValue },
             onLogsClick = onLogsClick,
@@ -139,6 +170,7 @@ fun MainContent(
 fun CaptureHUD(
     viewModel: MainViewModel,
     cameraControl: CameraControl?,
+    cameraInfo: CameraInfo? = null,
     fpsProvider: () -> Int = { viewModel.fpsValue },
     inferenceProvider: () -> Long = { viewModel.inferenceValue },
     onLogsClick: () -> Unit,
@@ -358,15 +390,26 @@ fun CaptureHUD(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
+            val expState = cameraInfo?.exposureState
+            val isExpSupported = expState?.isExposureCompensationSupported == true
+            val expRange = expState?.exposureCompensationRange
+            val minExp = expRange?.lower?.toFloat() ?: -4f
+            val maxExp = expRange?.upper?.toFloat() ?: 4f
+            val expStep = expState?.exposureCompensationStep?.toFloat() ?: 0.333f
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = {
                         viewModel.isTorchEnabled = !viewModel.isTorchEnabled
-                        cameraControl?.enableTorch(viewModel.isTorchEnabled)
+                        try {
+                            cameraControl?.enableTorch(viewModel.isTorchEnabled)
+                        } catch (e: Exception) {
+                            Log.e("CaptureHUD", "Failed to toggle torch", e)
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = if (viewModel.isTorchEnabled) Color(0xFF00FF9D) else Color.Transparent),
                     shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, Color.Gray),
+                    border = BorderStroke(1.dp, if (viewModel.isTorchEnabled) Color(0xFF00FF9D) else Color.Gray),
                     modifier = Modifier.width(100.dp)
                 ) {
                     Text("TORCH", color = if (viewModel.isTorchEnabled) Color.Black else Color.White)
@@ -380,21 +423,41 @@ fun CaptureHUD(
                     fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.width(16.dp))
+                
+                val currentExpIdx = viewModel.exposureValue.toInt().coerceIn(minExp.toInt(), maxExp.toInt())
+                val evVal = currentExpIdx * expStep
+                val expText = if (isExpSupported) {
+                    if (evVal >= 0f) "+${String.format("%.1f", evVal)} EV" else "${String.format("%.1f", evVal)} EV"
+                } else {
+                    "EXP ${currentExpIdx}"
+                }
+
                 Text(
-                    text = "EXP ${viewModel.exposureValue.toInt()}",
-                    color = Color.Gray,
+                    text = expText,
+                    color = if (isExpSupported) Color(0xFF00FF9D) else Color.Gray,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
                 Slider(
-                    value = viewModel.exposureValue,
+                    value = viewModel.exposureValue.coerceIn(minExp, maxExp),
                     onValueChange = {
                         viewModel.exposureValue = it
-                        cameraControl?.setExposureCompensationIndex(it.toInt())
+                        if (isExpSupported) {
+                            val targetIndex = it.toInt().coerceIn(minExp.toInt(), maxExp.toInt())
+                            try {
+                                cameraControl?.setExposureCompensationIndex(targetIndex)
+                            } catch (e: Exception) {
+                                Log.e("CaptureHUD", "Failed to set exposure index", e)
+                            }
+                        }
                     },
-                    valueRange = -4f..4f,
+                    valueRange = if (minExp < maxExp) minExp..maxExp else -4f..4f,
+                    enabled = isExpSupported || cameraControl != null,
                     modifier = Modifier.weight(1f),
-                    colors = SliderDefaults.colors(thumbColor = Color(0xFF00FF9D), activeTrackColor = Color(0xFF00FF9D))
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF00FF9D),
+                        activeTrackColor = Color(0xFF00FF9D)
+                    )
                 )
             }
 
