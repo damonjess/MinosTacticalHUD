@@ -362,14 +362,13 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                         if (track.missedCount > 0) "PREDICTING" else "TRACKING"
                     }
 
-                    // Label Formatting
+                    // Label Formatting — keep it compact to avoid overlap
                     val shortName = track.rawLabel.uppercase()
                     val labelText = if (isLocked) {
-                        val sizeStr = if (track.sizePct > 20f) "LGE" else if (track.sizePct > 5f) "MED" else "SML"
-                        val motionStr = if (track.vy > 0.1f) "DWN" else if (track.vy < -0.1f) "UP" else "STABLE"
-                        "$shortName $status | ${(track.confidence * 100).toInt()}% | S:$sizeStr M:$motionStr"
+                        val sizeStr = if (track.sizePct > 20f) "L" else if (track.sizePct > 5f) "M" else "S"
+                        "$shortName $status ${(track.confidence * 100).toInt()}% S:$sizeStr"
                     } else {
-                        "$shortName $status | ${(track.confidence * 100).toInt()}%"
+                        "$shortName $status ${(track.confidence * 100).toInt()}%"
                     }
 
                     textPaint.color = paintToUse.color

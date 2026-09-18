@@ -180,6 +180,7 @@ fun CaptureHUD(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(Color(0xAA000000))
                 .padding(start = 12.dp, end = 12.dp, top = 40.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -189,7 +190,8 @@ fun CaptureHUD(
                 color = Color(0xFF00FF9D),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.padding(end = 12.dp)
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -220,10 +222,12 @@ fun CaptureHUD(
             }
         }
 
+        val targetCount = viewModel.trackedTargets.size
+        val targetWord = if (targetCount == 1) "TARGET" else "TARGETS"
         val statusText = if (viewModel.modelLoadError != null) {
             "MODEL ERROR: ${viewModel.modelLoadError}"
         } else {
-            "LIVE  •  ${viewModel.trackedTargets.size} TARGETS  •  ${if (viewModel.isScanning) "Scanning" else "Paused"}"
+            "LIVE  •  $targetCount $targetWord  •  ${if (viewModel.isScanning) "Scanning" else "Paused"}"
         }
         val statusColor = if (viewModel.modelLoadError != null) Color(0xFFFF3333) else Color(0xFF00A8FF)
 
@@ -232,7 +236,10 @@ fun CaptureHUD(
             color = statusColor,
             fontSize = 14.sp,
             fontFamily = FontFamily.Monospace,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xAA000000))
+                .padding(horizontal = 16.dp, vertical = 2.dp)
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -266,7 +273,12 @@ fun CaptureHUD(
         }
 
         // Feature 1: Personal Tracking Profile Selector
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xAA000000))
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -284,7 +296,7 @@ fun CaptureHUD(
                     viewModel.fpsValue in 1..11 -> "LOW FPS"
                     else -> "OPTIMAL"
                 }
-                Text(text = "SYS: $motionStatus", color = Color.Gray, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Text(text = "SYS: $motionStatus", color = if (motionStatus == "OPTIMAL") Color(0xFF00FF9D) else if (motionStatus == "WEAK") Color(0xFFFFB300) else Color(0xFFFF6B00), fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.height(4.dp))
             Row(
@@ -294,8 +306,15 @@ fun CaptureHUD(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 TrackingProfile.values().forEach { profile ->
+                    val shortName = when (profile) {
+                        TrackingProfile.VEHICLE -> "VEH"
+                        TrackingProfile.PEOPLE -> "PEOPLE"
+                        TrackingProfile.INDOOR -> "INDOOR"
+                        TrackingProfile.OUTDOOR -> "OUTDOOR"
+                        TrackingProfile.MOVING -> "MOVE"
+                    }
                     ProfileButton(
-                        text = profile.displayName.replace(" Mode", "").uppercase(),
+                        text = shortName,
                         active = viewModel.selectedProfile == profile
                     ) {
                         viewModel.setProfile(profile)
@@ -307,7 +326,12 @@ fun CaptureHUD(
         Spacer(modifier = Modifier.height(8.dp))
 
         // Feature 3: Quality versus Speed Preset Switch
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xAA000000))
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -330,19 +354,21 @@ fun CaptureHUD(
                     Button(
                         onClick = { viewModel.setPreset(preset) },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (viewModel.qualityPreset == preset) Color(0xFF062332) else Color.Transparent
+                            containerColor = if (viewModel.qualityPreset == preset) Color(0xFF062332) else Color(0xAA000000)
                         ),
                         shape = RoundedCornerShape(16.dp),
-                        border = BorderStroke(1.dp, if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.DarkGray),
+                        border = BorderStroke(1.dp, if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.Gray),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
                             text = preset.displayName.uppercase(),
-                            color = if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.Gray,
+                            color = if (viewModel.qualityPreset == preset) Color(0xFF00E5FF) else Color.White,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -407,7 +433,7 @@ fun CaptureHUD(
                             Log.e("CaptureHUD", "Failed to toggle torch", e)
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = if (viewModel.isTorchEnabled) Color(0xFF00FF9D) else Color.Transparent),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (viewModel.isTorchEnabled) Color(0xFF00FF9D) else Color(0xAA000000)),
                     shape = RoundedCornerShape(20.dp),
                     border = BorderStroke(1.dp, if (viewModel.isTorchEnabled) Color(0xFF00FF9D) else Color.Gray),
                     modifier = Modifier.width(100.dp)
@@ -462,8 +488,10 @@ fun CaptureHUD(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+            val savedCount = EventRepository.events.size
+            val savedWord = if (savedCount == 1) "SAVED" else "SAVED"
             Text(
-                text = "${viewModel.trackedTargets.size} TARGETS  •  ${EventRepository.events.size} SAVED  •  BEST-FRAME AUTO CAPTURE",
+                text = "$targetCount $targetWord  •  $savedCount $savedWord  •  BEST-FRAME AUTO CAPTURE",
                 color = Color.White,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
@@ -483,7 +511,7 @@ fun CaptureHUD(
                     contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        if (viewModel.isCaptureOn) "AUTO CAPTURE ON" else "AUTO CAPTURE OFF",
+                        if (viewModel.isCaptureOn) "CAPTURE ON" else "CAPTURE OFF",
                         color = Color.White,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -560,14 +588,14 @@ fun IsolatedTelemetryDisplay(
 fun ProfileButton(text: String, active: Boolean, onClick: () -> Unit) {
     Button(
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = if (active) Color(0xFF06231A) else Color.Transparent),
+        colors = ButtonDefaults.buttonColors(containerColor = if (active) Color(0xFF06231A) else Color(0xAA000000)),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, if (active) Color(0xFF00FF9D) else Color.Gray),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
     ) {
         Text(
             text = text,
-            color = if (active) Color(0xFF00FF9D) else Color.Gray,
+            color = if (active) Color(0xFF00FF9D) else Color.White,
             fontSize = 12.sp,
             maxLines = 1,
             softWrap = false,
