@@ -28,6 +28,7 @@ class MainViewModel : ViewModel() {
     var currentScreen by mutableStateOf(Screen.HUD)
 
     var isCaptureOn by mutableStateOf(true)
+    var isCleanView by mutableStateOf(false)
     var selectedProfile by mutableStateOf(TrackingProfile.OUTDOOR)
     var currentProfile by mutableStateOf("OUTDOOR")
     var qualityPreset by mutableStateOf(QualitySpeedPreset.BALANCED)

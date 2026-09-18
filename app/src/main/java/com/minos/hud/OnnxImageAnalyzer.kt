@@ -461,13 +461,30 @@ class OnnxImageAnalyzer(
                     if (vehicleCrop.width >= 100 && vehicleCrop.height >= 60) {
                         detector.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
                             val p = plateResult.plateTarget
-                            val vW = yolo.xMax - yolo.xMin
-                            val vH = yolo.yMax - yolo.yMin
+                            val left = (yolo.xMin * fullFrame.width)
+                            val top = (yolo.yMin * fullFrame.height)
+                            val w = ((yolo.xMax - yolo.xMin) * fullFrame.width)
+                            val h = ((yolo.yMax - yolo.yMin) * fullFrame.height)
+
+                            val padding = BestFrameSelector.getPaddingForLabel(yolo.rawLabel)
+                            val padX = w * padding
+                            val padY = h * padding
+
+                            val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
+                            val paddedTop = (top - padY).toInt().coerceAtLeast(0)
+                            val paddedRight = (left + w + padX).toInt().coerceAtMost(fullFrame.width - 1)
+                            val paddedBottom = (top + h + padY).toInt().coerceAtMost(fullFrame.height - 1)
+
+                            val cropXMin = paddedLeft.toFloat() / fullFrame.width
+                            val cropYMin = paddedTop.toFloat() / fullFrame.height
+                            val cropW = (paddedRight - paddedLeft).toFloat() / fullFrame.width
+                            val cropH = (paddedBottom - paddedTop).toFloat() / fullFrame.height
+
                             detectedPlate = p.copy(
-                                xMin = yolo.xMin + p.xMin * vW,
-                                yMin = yolo.yMin + p.yMin * vH,
-                                xMax = yolo.xMin + p.xMax * vW,
-                                yMax = yolo.yMin + p.yMax * vH
+                                xMin = cropXMin + p.xMin * cropW,
+                                yMin = cropYMin + p.yMin * cropH,
+                                xMax = cropXMin + p.xMax * cropW,
+                                yMax = cropYMin + p.yMax * cropH
                             )
                         }
                     }
@@ -847,7 +864,21 @@ class OnnxImageAnalyzer(
                     captureExecutor.execute {
                         if (!bitmap.isRecycled) {
                             val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
-                            val plateId = "PLATE-${(plateTarget.xMin * 100).toInt()}-${(plateTarget.yMin * 100).toInt()}"
+                            
+                            val cx = (plateTarget.xMin + plateTarget.xMax) / 2f
+                            val cy = (plateTarget.yMin + plateTarget.yMax) / 2f
+                            val matchingTrack = updatedTracks.minByOrNull { track ->
+                                val tCx = (track.xMin + track.xMax) / 2f
+                                val tCy = (track.yMin + track.yMax) / 2f
+                                (cx - tCx) * (cx - tCx) + (cy - tCy) * (cy - tCy)
+                            }
+                            
+                            val plateId = if (matchingTrack != null) {
+                                "PLATE-${matchingTrack.id}"
+                            } else {
+                                "PLATE-${(plateTarget.xMin * 10).toInt()}-${(plateTarget.yMin * 10).toInt()}"
+                            }
+                            
                             captureManager.processDetection(
                                 id = plateId,
                                 label = "LICENSE PLATE",
