@@ -79,11 +79,11 @@ enum class TrackingProfile(
     ),
     INDOOR(
         displayName = "Indoor Mode",
-        description = "Person and selected objects. Torch suggestion. Lower clutter.",
+        description = "Person, indoor pets, and selected objects. Torch suggestion. Lower clutter.",
         modelInputSize = 640,
         confidenceThreshold = 0.40f,
         detectionMode = DetectionMode.CUSTOM,
-        allowedClasses = setOf("person", "chair", "couch", "tv", "laptop", "cell phone", "bottle", "cup", "book", "clock", "potted plant"),
+        allowedClasses = setOf("person", "dog", "cat", "bird", "chair", "couch", "tv", "laptop", "cell phone", "bottle", "cup", "book", "clock", "potted plant"),
         plateScanIntervalMs = 3000L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 10000L,

@@ -24,6 +24,8 @@ class FeaturesUnitTest {
         val indoorProfile = TrackingProfile.INDOOR
         assertTrue(indoorProfile.suggestTorch)
         assertEquals(0.40f, indoorProfile.confidenceThreshold, 0.01f)
+        assertTrue(indoorProfile.allowedClasses!!.contains("dog"))
+        assertTrue(indoorProfile.allowedClasses!!.contains("cat"))
 
         val movingProfile = TrackingProfile.MOVING
         assertEquals(0.85f, movingProfile.boxSmoothingAlpha, 0.01f)
@@ -92,6 +94,9 @@ class FeaturesUnitTest {
 
         val platePad = BestFrameSelector.getPaddingForLabel("plate")
         assertEquals(0.04f, platePad, 0.001f)
+
+        val dogPad = BestFrameSelector.getPaddingForLabel("dog")
+        assertEquals(0.18f, dogPad, 0.001f)
     }
 
     @Test

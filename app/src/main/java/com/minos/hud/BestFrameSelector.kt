@@ -154,10 +154,12 @@ object BestFrameSelector {
     }
 
     fun getPaddingForLabel(label: String): Float {
-        return when (label.lowercase().trim()) {
-            "person" -> 0.10f
-            "car", "truck", "bus", "motorcycle", "vehicle" -> 0.12f
-            "plate", "license_plate", "license plate" -> 0.04f
+        val raw = label.lowercase().trim()
+        return when {
+            raw == "person" -> 0.10f
+            raw in listOf("car", "truck", "bus", "motorcycle", "vehicle") -> 0.12f
+            raw in listOf("plate", "license_plate", "license plate") -> 0.04f
+            raw in ANIMAL_CLASSES -> 0.18f
             else -> 0.08f
         }
     }
@@ -215,23 +217,22 @@ class CaptureManager(
 
         val raw = (if (rawLabel.isNotEmpty()) rawLabel else label).lowercase().trim()
         val isPlate = raw in listOf("plate", "license_plate", "license plate")
+        val isAnimal = raw in ANIMAL_CLASSES
 
-        // Feature 4 Rule 3: Minimum crop size check
-        val tooSmall = if (isPlate) {
-            bitmap.width < minPlateCropWidth || bitmap.height < minPlateCropHeight
-        } else {
-            bitmap.width < minCropWidth || bitmap.height < minCropHeight
-        }
-        if (tooSmall) return
+        // Feature 4 Rule 3: Minimum crop size check - allow smaller/horizontal crops for animals
+        val reqMinW = if (isAnimal) 60 else if (isPlate) minPlateCropWidth else minCropWidth
+        val reqMinH = if (isAnimal) 60 else if (isPlate) minPlateCropHeight else minCropHeight
+        if (bitmap.width < reqMinW || bitmap.height < reqMinH) return
 
         // Feature 4 Rule 5: Exposure problem check
         if (!BestFrameSelector.checkExposure(bitmap)) {
             return
         }
 
-        // Feature 4 Rule 4: Sharpness threshold check
+        // Feature 4 Rule 4: Sharpness threshold check - animals with soft fur get a relaxed floor (0.15f)
+        val effectiveMinSharpness = if (isAnimal) minOf(minSharpnessThreshold, 0.15f) else minSharpnessThreshold
         val sharpnessScore = BestFrameSelector.calculateSharpnessScore(bitmap)
-        if (sharpnessScore < minSharpnessThreshold) {
+        if (sharpnessScore < effectiveMinSharpness) {
             return
         }
 
@@ -281,8 +282,10 @@ class CaptureManager(
                 )
             }
             
-            // Feature 4 Rule 1: Require same target detected for at least N frames (minStableFrames, default 5)
-            if (current.frameCount >= minStableFrames || now - current.firstSeen > 900) {
+            // Feature 4 Rule 1: Require same target detected for at least N frames (or 2 frames for animals)
+            val requiredFrames = if (isAnimal) minOf(minStableFrames, 2) else minStableFrames
+            val maxWaitMs = if (isAnimal) 400L else 900L
+            if (current.frameCount >= requiredFrames || now - current.firstSeen > maxWaitMs) {
                 val best = pendingCaptures.remove(id) ?: return
                 capturedIds[id] = now
 
