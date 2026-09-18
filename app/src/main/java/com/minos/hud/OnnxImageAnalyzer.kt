@@ -201,30 +201,36 @@ class OnnxImageAnalyzer(
             }
 
             val inputTensor = OnnxTensor.createTensor(env, tensorBuffer, longArrayOf(1, 3, modelInputSize.toLong(), modelInputSize.toLong()))
-            val inputName = session.inputNames.iterator().next()
-            val inputs = mapOf(inputName to inputTensor)
-            val outputs = session.run(inputs)
+            try {
+                val inputName = session.inputNames.iterator().next()
+                val inputs = mapOf(inputName to inputTensor)
+                val outputs = session.run(inputs)
+                try {
+                    if (outputs != null) {
+                        val sensitivity = getSensitivityThreshold()
+                        val maxDet = getMaxDetections()
+                        val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
 
-            if (outputs != null) {
-                val sensitivity = getSensitivityThreshold()
-                val maxDet = getMaxDetections()
-                val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
+                        val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, startTime)
+                        targets.addAll(plateTargets)
 
-                val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, startTime)
-                targets.addAll(plateTargets)
+                        val inferenceTime = System.currentTimeMillis() - startTime
+                        val width = rotatedBitmap.width
+                        val height = rotatedBitmap.height
 
-                val inferenceTime = System.currentTimeMillis() - startTime
-                val width = rotatedBitmap.width
-                val height = rotatedBitmap.height
+                        val magTracksCopy = synchronized(activeTracks) { activeTracks.toList() }
+                        val yoloTargetsCopy = targets.toList()
 
-                val magTracksCopy = synchronized(activeTracks) { activeTracks.toList() }
-                val yoloTargetsCopy = targets.toList()
-
-                mainHandler.post {
-                    onTargetsDetected(magTracksCopy, yoloTargetsCopy, inferenceTime, width, height)
+                        mainHandler.post {
+                            onTargetsDetected(magTracksCopy, yoloTargetsCopy, inferenceTime, width, height)
+                        }
+                    }
+                } finally {
+                    outputs.close()
                 }
+            } finally {
+                inputTensor.close()
             }
-            inputTensor.close()
         } catch (e: Exception) {
             Log.e("OnnxImageAnalyzer", "Inference failed", e)
             mainHandler.post {
@@ -291,7 +297,14 @@ class OnnxImageAnalyzer(
         val srcH = sourceBitmap.height.toFloat()
         val mode = getDetectionMode()
         val profile = getProfile()
-        val effectiveSensitivity = maxOf(profile.confidenceThreshold, sensitivityThreshold)
+
+        // Per-class confidence floor: animals get a lower floor so lightweight YOLO models
+        // can still detect dogs, cats, etc. that often score below the profile default.
+        // The user's sensitivity slider is authoritative — the floor only prevents
+        // going so low that noise dominates.
+        val sensitivity = sensitivityThreshold
+        val animalFloor = 0.20f
+        val defaultFloor = 0.15f
 
         for (i in 0 until numElements) {
             var maxScore = 0f
@@ -320,7 +333,7 @@ class OnnxImageAnalyzer(
                     DetectionMode.ALL -> true
                     DetectionMode.PEOPLE -> rawLower == "person"
                     DetectionMode.VEHICLES -> rawLower in listOf("car", "truck", "bus", "motorcycle", "bicycle", "plate", "license_plate", "license plate")
-                    DetectionMode.ANIMALS -> rawLower in listOf("bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe")
+                    DetectionMode.ANIMALS -> rawLower in ANIMAL_CLASSES
                     DetectionMode.PLATES -> rawLower in listOf("car", "truck", "bus", "motorcycle", "plate", "license_plate", "license plate")
                     DetectionMode.CUSTOM -> true
                 }
@@ -329,7 +342,14 @@ class OnnxImageAnalyzer(
                 continue
             }
 
-            val classThreshold = maxOf(0.15f, effectiveSensitivity)
+            val classThreshold = if (rawLower in ANIMAL_CLASSES) {
+                // Animals: floor at 0.20 (lower than default) so dogs/cats are detected,
+                // but the slider can still raise it to filter false positives.
+                sensitivity.coerceAtLeast(animalFloor)
+            } else {
+                // People / vehicles / objects: floor at 0.15 to reject noise.
+                sensitivity.coerceAtLeast(defaultFloor)
+            }
 
             if (maxScore >= classThreshold) {
                 val cx = if (isTransposed) buffer.get(i * numChannels + 0) else buffer.get(0 * numElements + i)
@@ -783,9 +803,9 @@ class OnnxImageAnalyzer(
         if (getIsCaptureOn()) {
             updatedTracks.forEach { track ->
                 val raw = track.rawLabel.lowercase().trim()
-                val category = when (raw) {
-                    "car", "bus", "truck", "motorcycle", "bicycle", "person" -> EventCategory.PEOPLE_VEHICLES
-                    "dog", "cat", "bird", "bear", "horse", "sheep", "cow", "elephant", "zebra", "giraffe" -> EventCategory.ANIMALS
+                val category = when {
+                    raw in VEHICLE_CLASSES || raw == "person" || raw == "bicycle" -> EventCategory.PEOPLE_VEHICLES
+                    raw in ANIMAL_CLASSES -> EventCategory.ANIMALS
                     else -> null
                 }
 
@@ -881,11 +901,12 @@ class OnnxImageAnalyzer(
 
     private fun getTacticalLabel(baseLabel: String): String {
         val label = baseLabel.uppercase()
+        val labelLower = baseLabel.lowercase().trim()
         return when {
             label == "PERSON" -> "BIO-SIGN // PERSON"
-            label in listOf("BICYCLE", "CAR", "MOTORCYCLE", "AIRPLANE", "BUS", "TRAIN", "TRUCK", "BOAT") ->
+            labelLower in VEHICLE_CLASSES ->
                 "VEHICLE // $label"
-            label in listOf("DOG", "CAT", "BIRD", "HORSE", "SHEEP", "COW", "ELEPHANT", "BEAR", "ZEBRA", "GIRAFFE") ->
+            labelLower in ANIMAL_CLASSES ->
                 "ANIMAL // $label"
             else -> "OBJECT // $label"
         }

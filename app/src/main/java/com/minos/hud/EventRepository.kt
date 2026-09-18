@@ -166,7 +166,15 @@ object EventRepository {
                 val id = metaFile.name.substringBefore(".metadata")
                 File(eventDir, "thumb_$id.jpg").delete()
                 File(eventDir, "full_$id.jpg").delete()
-                File(eventDir, "clip_$id.mp4").delete() // Assuming mp4 or similar
+                // Clips are stored as directories named clip_<UUID>; read the path from metadata
+                try {
+                    val lines = metaFile.readLines()
+                    if (lines.size > 15 && lines[15] != "null") {
+                        File(lines[15]).deleteRecursively()
+                    }
+                } catch (e: Exception) {
+                    // Best-effort cleanup; metadata may be corrupted
+                }
                 metaFile.delete()
             }
             // Update live list if we are on main thread or post to it
@@ -179,7 +187,7 @@ object EventRepository {
     fun deleteEvent(context: Context, event: DetectedEvent) {
         File(event.thumbnailPath).delete()
         event.fullImagePath?.let { File(it).delete() }
-        event.videoClipPath?.let { File(it).delete() }
+        event.videoClipPath?.let { File(it).deleteRecursively() }
         File(context.filesDir, "events/${event.id}.metadata").delete()
         mainHandler.post {
             _events.remove(event)
@@ -190,7 +198,7 @@ object EventRepository {
         eventsToDelete.forEach { event ->
             File(event.thumbnailPath).delete()
             event.fullImagePath?.let { File(it).delete() }
-            event.videoClipPath?.let { File(it).delete() }
+            event.videoClipPath?.let { File(it).deleteRecursively() }
             File(context.filesDir, "events/${event.id}.metadata").delete()
         }
         mainHandler.post {

@@ -6,6 +6,19 @@ enum class EventCategory {
     PEOPLE_VEHICLES, ANIMALS, PLATES
 }
 
+/**
+ * Shared set of COCO animal class labels used across profiles, detection modes, and UI rendering.
+ * Keeping this in one place prevents the per-class lists from drifting out of sync.
+ */
+val ANIMAL_CLASSES = setOf(
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"
+)
+
+/** Shared set of vehicle class labels. */
+val VEHICLE_CLASSES = setOf(
+    "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"
+)
+
 enum class DetectionMode(val displayName: String) {
     PEOPLE("People only"),
     VEHICLES("Cars, trucks, buses, motorcycles, bicycles"),
@@ -54,7 +67,7 @@ enum class TrackingProfile(
         displayName = "People Mode",
         description = "Person detection only. Better face/body framing.",
         modelInputSize = 640,
-        confidenceThreshold = 0.45f,
+        confidenceThreshold = 0.35f,
         detectionMode = DetectionMode.PEOPLE,
         allowedClasses = setOf("person"),
         plateScanIntervalMs = 2000L,
@@ -82,9 +95,9 @@ enum class TrackingProfile(
         displayName = "Outdoor Mode",
         description = "People, vehicles, animals.",
         modelInputSize = 640,
-        confidenceThreshold = 0.45f,
+        confidenceThreshold = 0.30f,
         detectionMode = DetectionMode.ALL,
-        allowedClasses = setOf("person", "car", "truck", "bus", "motorcycle", "bicycle", "bird", "cat", "dog", "horse", "sheep", "cow", "bear", "plate"),
+        allowedClasses = setOf("person", "car", "truck", "bus", "motorcycle", "bicycle", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "plate"),
         plateScanIntervalMs = 400L,
         boxSmoothingAlpha = 0.80f,
         captureCooldownMs = 8000L,
@@ -96,7 +109,7 @@ enum class TrackingProfile(
         displayName = "Moving Mode",
         description = "More aggressive prediction. Less smoothing. Faster response.",
         modelInputSize = 640,
-        confidenceThreshold = 0.45f,
+        confidenceThreshold = 0.35f,
         detectionMode = DetectionMode.ALL,
         allowedClasses = null,
         plateScanIntervalMs = 300L,

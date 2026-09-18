@@ -38,8 +38,22 @@ object VideoBuffer {
         for (f in frames) {
             try {
                 list.add(f.bitmap.copy(f.bitmap.config ?: Bitmap.Config.ARGB_8888, false))
-            } catch (e: Exception) {}
+            } catch (e: Exception) {
+                // skip recycled or invalid frames
+            }
         }
         return list
+    }
+
+    @Synchronized
+    fun clear() {
+        for (f in frames) {
+            try {
+                if (!f.bitmap.isRecycled) f.bitmap.recycle()
+            } catch (e: Exception) {
+                // already recycled
+            }
+        }
+        frames.clear()
     }
 }

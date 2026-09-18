@@ -45,6 +45,11 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         isAntiAlias = true
     }
 
+    private val bracketPaint = Paint().apply {
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+
     private val textPaint = Paint().apply {
         color = Color.parseColor("#00FF66")
         textSize = 32f
@@ -340,7 +345,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     val paintToUse = if (isLocked) lockedPaint else when (track.rawLabel.lowercase()) {
                         "person" -> personPaint
                         "plate" -> platePaint
-                        "dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe" -> animalPaint
+                        in ANIMAL_CLASSES -> animalPaint
                         else -> vehiclePaint
                     }
 
@@ -415,12 +420,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
 
     private fun drawTargetBrackets(canvas: Canvas, l: Float, t: Float, r: Float, b: Float, colorInt: Int, isLocked: Boolean = false) {
         val bracket = if (isLocked) 40f else 22f
-        val bracketPaint = Paint().apply {
-            color = colorInt
-            strokeWidth = if (isLocked) 8f else 5f
-            style = Paint.Style.STROKE
-            isAntiAlias = true
-        }
+        bracketPaint.color = colorInt
+        bracketPaint.strokeWidth = if (isLocked) 8f else 5f
         // Top-Left
         canvas.drawLine(l, t, l + bracket, t, bracketPaint)
         canvas.drawLine(l, t, l, t + bracket, bracketPaint)

@@ -59,11 +59,14 @@ class FeaturesUnitTest {
         assertEquals(QualitySpeedPreset.BALANCED, viewModel.qualityPreset)
         assertFalse(viewModel.isTargetLocked)
 
-        // Switch profile
+        // Switch profile — sensitivity is set to the profile's confidenceThreshold,
+        // but the per-class threshold logic in OnnxImageAnalyzer allows animals
+        // to be detected at a lower effective threshold.
         viewModel.setProfile(TrackingProfile.VEHICLE)
         assertEquals(TrackingProfile.VEHICLE, viewModel.selectedProfile)
         assertEquals("VEHICLE", viewModel.currentProfile)
         assertEquals(0.35f, viewModel.sensitivityThreshold, 0.01f)
+        assertEquals(DetectionMode.VEHICLES, viewModel.detectionMode)
 
         // Switch preset
         viewModel.setPreset(QualitySpeedPreset.QUALITY)
@@ -125,5 +128,42 @@ class FeaturesUnitTest {
         
         // Confidence floor allows low-light detections at 0.25
         assertTrue(0.28f >= minConf)
+    }
+
+    @Test
+    fun testOutdoorDefaultSensitivityIsLowEnoughForAnimals() {
+        // The OUTDOOR profile sets sensitivityThreshold to its confidenceThreshold (0.30f),
+        // which is low enough for YOLOv8n to detect dogs that often score 0.20–0.35.
+        val viewModel = MainViewModel()
+        assertEquals(0.30f, viewModel.sensitivityThreshold, 0.01f)
+    }
+
+    @Test
+    fun testAnimalClassesContainsAllCocoAnimals() {
+        val expected = setOf("bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe")
+        assertEquals(expected, ANIMAL_CLASSES)
+    }
+
+    @Test
+    fun testOutdoorProfileIncludesAllAnimals() {
+        val outdoor = TrackingProfile.OUTDOOR
+        // Every COCO animal class should be in the OUTDOOR allowedClasses
+        for (animal in ANIMAL_CLASSES) {
+            assertTrue("OUTDOOR profile should allow '$animal'",
+                outdoor.allowedClasses!!.contains(animal))
+        }
+    }
+
+    @Test
+    fun testOutdoorConfidenceThresholdIsLowEnoughForAnimals() {
+        // The OUTDOOR profile threshold should be at most 0.30 so that lightweight
+        // YOLO models can detect animals (dogs, cats) that often score 0.20–0.35.
+        assertTrue(TrackingProfile.OUTDOOR.confidenceThreshold <= 0.30f)
+    }
+
+    @Test
+    fun testVehicleClassesContainsAllCocoVehicles() {
+        val expected = setOf("bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat")
+        assertEquals(expected, VEHICLE_CLASSES)
     }
 }

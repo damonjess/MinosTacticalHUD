@@ -259,7 +259,7 @@ class YoloAnalyzer(
             DetectionMode.ALL -> true
             DetectionMode.PEOPLE -> l == "person"
             DetectionMode.VEHICLES -> l in listOf("car", "truck", "bus", "motorcycle", "bicycle")
-            DetectionMode.ANIMALS -> l in listOf("bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe")
+            DetectionMode.ANIMALS -> l in ANIMAL_CLASSES
             DetectionMode.PLATES -> l in listOf("car", "truck", "bus", "motorcycle", "plate")
             DetectionMode.CUSTOM -> true // Let the user configure this later
         }

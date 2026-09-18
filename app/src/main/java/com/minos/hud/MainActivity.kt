@@ -274,5 +274,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         imageAnalyzer?.close()
         cameraExecutor.shutdown()
+        VideoBuffer.clear()
     }
 }
