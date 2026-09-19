@@ -35,22 +35,26 @@ class LicensePlateDetector(
     init {
         try {
             val modelBytes = context.assets.open("license_plate_yolov5s.onnx").readBytes()
+            val cpuOptions = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(4)
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                try {
+                    addXnnpack(mapOf("intra_op_num_threads" to "4"))
+                } catch (e: Throwable) {
+                    // XNNPACK provider unsupported or omitted in build
+                }
+            }
             try {
-                val nnapiOptions = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(4)
-                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                    addNnapi()
-                }
-                ortSession = ortEnv.createSession(modelBytes, nnapiOptions)
-                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with NNAPI execution provider.")
-            } catch (e: Exception) {
-                Log.w("LicensePlateDetector", "NNAPI initialization failed for license_plate_yolov5s.onnx (${e.message}). Falling back to CPU execution.", e)
-                val cpuOptions = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(4)
-                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                }
                 ortSession = ortEnv.createSession(modelBytes, cpuOptions)
-                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with CPU execution provider.")
+                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with optimized CPU execution provider.")
+            } catch (e: Exception) {
+                Log.w("LicensePlateDetector", "Optimized CPU initialization failed (${e.message}). Falling back to basic CPU execution.", e)
+                val fallbackOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                }
+                ortSession = ortEnv.createSession(modelBytes, fallbackOptions)
+                Log.i("LicensePlateDetector", "Successfully loaded license_plate_yolov5s.onnx with basic CPU execution provider.")
             }
         } catch (e: Exception) {
             Log.e("LicensePlateDetector", "Failed to load license_plate_yolov5s.onnx", e)

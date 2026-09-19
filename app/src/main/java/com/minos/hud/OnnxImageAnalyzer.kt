@@ -77,6 +77,8 @@ class OnnxImageAnalyzer(
     private val plateIntervalNs = 400_000_000L // 400 ms time throttle
 
     private var lastTelemetryTime = 0L
+    @Volatile private var lastAgeMs = 0L
+    @Volatile private var lastStagesLog = ""
     private var plateScansCount = 0
     private var expiredTracksCount = 0
 
@@ -113,22 +115,26 @@ class OnnxImageAnalyzer(
                 val modelBytes = context.assets.open(modelName).use { it.readBytes() }
                 
                 var session: OrtSession? = null
+                val cpuOptions = OrtSession.SessionOptions().apply {
+                    setIntraOpNumThreads(4)
+                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                    try {
+                        addXnnpack(mapOf("intra_op_num_threads" to "4"))
+                    } catch (e: Throwable) {
+                        // XNNPACK provider unsupported or omitted in build
+                    }
+                }
                 try {
-                    val nnapiOptions = OrtSession.SessionOptions().apply {
-                        setIntraOpNumThreads(4)
-                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                        addNnapi()
-                    }
-                    session = env.createSession(modelBytes, nnapiOptions)
-                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with NNAPI execution provider.")
-                } catch (e: Exception) {
-                    Log.w("OnnxImageAnalyzer", "NNAPI initialization failed for $modelName (${e.message}). Falling back to CPU execution.", e)
-                    val cpuOptions = OrtSession.SessionOptions().apply {
-                        setIntraOpNumThreads(4)
-                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                    }
                     session = env.createSession(modelBytes, cpuOptions)
-                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with CPU execution provider.")
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with optimized CPU execution provider (4 threads, ALL_OPT).")
+                } catch (e: Exception) {
+                    Log.w("OnnxImageAnalyzer", "Optimized CPU initialization failed for $modelName (${e.message}). Falling back to basic CPU execution.", e)
+                    val fallbackOptions = OrtSession.SessionOptions().apply {
+                        setIntraOpNumThreads(4)
+                    }
+                    session = env.createSession(modelBytes, fallbackOptions)
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with basic CPU execution provider.")
                 }
                 ortSession = session
 
@@ -155,10 +161,11 @@ class OnnxImageAnalyzer(
 
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
-        val startTime = System.currentTimeMillis()
-        val nowRt = SystemClock.elapsedRealtime()
+        val s0 = SystemClock.elapsedRealtime()
+        val nowRt = s0
         val ageNs = SystemClock.elapsedRealtimeNanos() - imageProxy.imageInfo.timestamp
-        val frameTimeMs = if (ageNs in 0L..400_000_000L) nowRt - ageNs / 1_000_000L else nowRt
+        lastAgeMs = ageNs / 1_000_000L
+        val frameTimeMs = if (ageNs in 0L..400_000_000L) nowRt - lastAgeMs else nowRt
 
         mainHandler.post { updateFps() }
 
@@ -193,11 +200,15 @@ class OnnxImageAnalyzer(
             rawBitmap
         }
 
+        val s1 = SystemClock.elapsedRealtime()
+
         val letterboxInfo = preprocessLetterbox(rotatedBitmap)
         val env = ortEnv ?: run {
             rotatedBitmap.recycle()
             return
         }
+
+        val s2 = SystemClock.elapsedRealtime()
 
         try {
             val session = ortSession ?: run {
@@ -210,6 +221,7 @@ class OnnxImageAnalyzer(
                 val inputName = session.inputNames.iterator().next()
                 val inputs = mapOf(inputName to inputTensor)
                 val outputs = session.run(inputs)
+                val s3 = SystemClock.elapsedRealtime()
                 try {
                     if (outputs != null) {
                         val sensitivity = getSensitivityThreshold()
@@ -220,10 +232,17 @@ class OnnxImageAnalyzer(
                             mainHandler.post { onBoxesReady(boxes, frameTimeMs, w, h) }
                         }.toMutableList()
 
-                        val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, startTime)
+                        val s4 = SystemClock.elapsedRealtime()
+
+                        val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, s0)
                         targets.addAll(plateTargets)
 
-                        val inferenceTime = System.currentTimeMillis() - startTime
+                        val s5 = SystemClock.elapsedRealtime()
+
+                        lastStagesLog = "stages: convert=${s1 - s0}ms pre=${s2 - s1}ms ort=${s3 - s2}ms post=${s4 - s3}ms track+plates=${s5 - s4}ms"
+                        Log.i("OnnxImageAnalyzer", lastStagesLog)
+
+                        val inferenceTime = System.currentTimeMillis() - s0
                         val width = rotatedBitmap.width
                         val height = rotatedBitmap.height
 
@@ -926,10 +945,11 @@ class OnnxImageAnalyzer(
         }
 
         // 1-second Telemetry Logging
-        val totalAnalyzerTime = System.currentTimeMillis() - startTime
+        val totalAnalyzerTime = SystemClock.elapsedRealtime() - startTime
         val nowMs = System.currentTimeMillis()
         if (nowMs - lastTelemetryTime >= 1000) {
-            Log.i("OnnxImageAnalyzer", "Telemetry: profile=${profile.name}, preset=${qualityPreset.name}, lockedId=${lockedId ?: "none"}, input=${modelInputSize}x${modelInputSize}, inference=${System.currentTimeMillis() - startTime}ms, analyzer=${totalAnalyzerTime}ms, FPS=${frameCount}, activeTracks=${updatedTracks.size}, plateScans=${plateScansCount}, expiredTracks=${expiredTracksCount}")
+            val isRealtime = lastAgeMs in 0..400
+            Log.i("OnnxImageAnalyzer", "Telemetry: ageMs=${lastAgeMs}ms (realtime=$isRealtime), profile=${profile.name}, preset=${qualityPreset.name}, lockedId=${lockedId ?: "none"}, input=${modelInputSize}x${modelInputSize}, analyzer=${totalAnalyzerTime}ms, FPS=${frameCount}, activeTracks=${updatedTracks.size}, plateScans=${plateScansCount}, expiredTracks=${expiredTracksCount}, $lastStagesLog")
             plateScansCount = 0
             expiredTracksCount = 0
             lastTelemetryTime = nowMs
