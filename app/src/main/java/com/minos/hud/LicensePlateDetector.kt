@@ -65,7 +65,7 @@ class LicensePlateDetector(
         maxRatio: Float = maxAspectRatio
     ): PlateDetectionResult? {
         val session = ortSession ?: return null
-        if (vehicleBitmap.isRecycled || vehicleBitmap.width < 80 || vehicleBitmap.height < 40) return null
+        if (vehicleBitmap.isRecycled || vehicleBitmap.width < 40 || vehicleBitmap.height < 20) return null
 
         val srcW = vehicleBitmap.width.toFloat()
         val srcH = vehicleBitmap.height.toFloat()
@@ -105,21 +105,29 @@ class LicensePlateDetector(
             val buffer = outputTensor.floatBuffer
             val shape = outputTensor.info.shape
             
-            val numBoxes = shape[1].toInt()
-            val numFeatures = shape[2].toInt()
-            var maxConf = confidenceThreshold.coerceAtLeast(0.15f)
+            val dim1 = shape[1].toInt()
+            val dim2 = shape[2].toInt()
+            val isTransposed = dim1 < dim2 && (dim1 == 5 || dim1 == 6 || dim1 == 84 || dim1 == 85)
+            val numBoxes = if (isTransposed) dim2 else dim1
+            val numFeatures = if (isTransposed) dim1 else dim2
+            var maxConf = confidenceThreshold.coerceAtLeast(0.12f)
 
             for (i in 0 until numBoxes) {
-                val offset = i * numFeatures
-                val objConf = buffer.get(offset + 4)
-                val clsConf = if (numFeatures > 5) buffer.get(offset + 5) else 1.0f
+                val cxRaw = if (isTransposed) buffer.get(0 * numBoxes + i) else buffer.get(i * numFeatures + 0)
+                val cyRaw = if (isTransposed) buffer.get(1 * numBoxes + i) else buffer.get(i * numFeatures + 1)
+                val wRaw  = if (isTransposed) buffer.get(2 * numBoxes + i) else buffer.get(i * numFeatures + 2)
+                val hRaw  = if (isTransposed) buffer.get(3 * numBoxes + i) else buffer.get(i * numFeatures + 3)
+                val objConf = if (isTransposed) buffer.get(4 * numBoxes + i) else buffer.get(i * numFeatures + 4)
+                val clsConf = if (numFeatures > 5) {
+                    if (isTransposed) buffer.get(5 * numBoxes + i) else buffer.get(i * numFeatures + 5)
+                } else 1.0f
                 val confidence = objConf * clsConf
 
                 if (confidence > maxConf) {
-                    val cx = (buffer.get(offset + 0) - padX) / (scale * srcW)
-                    val cy = (buffer.get(offset + 1) - padY) / (scale * srcH)
-                    val w = buffer.get(offset + 2) / (scale * srcW)
-                    val h = buffer.get(offset + 3) / (scale * srcH)
+                    val cx = (cxRaw - padX) / (scale * srcW)
+                    val cy = (cyRaw - padY) / (scale * srcH)
+                    val w = wRaw / (scale * srcW)
+                    val h = hRaw / (scale * srcH)
                     
                     val aspectRatio = w / maxOf(0.01f, h)
                     // Plausible plate aspect ratios (supports oblique angles, square plates, wide ratios)

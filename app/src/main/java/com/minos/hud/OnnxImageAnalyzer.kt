@@ -458,7 +458,7 @@ class OnnxImageAnalyzer(
             val detector = licensePlateDetector
             if (detector != null && detector.isLoaded) {
                 yolo.crop?.let { vehicleCrop ->
-                    if (vehicleCrop.width >= 100 && vehicleCrop.height >= 60) {
+                    if (vehicleCrop.width >= 40 && vehicleCrop.height >= 20) {
                         detector.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
                             val p = plateResult.plateTarget
                             val left = (yolo.xMin * fullFrame.width)
@@ -496,8 +496,8 @@ class OnnxImageAnalyzer(
                 detectedPlate = findMainModelPlateTargetForVehicle(yolo, allTargets, fullFrame)
             }
 
-            // 3. Secondary Fallback: Heuristic Bumper Plate Region Crop when dedicated plate model is missing/failed AND main model has no plate detection
-            if (detectedPlate == null && (detector == null || !detector.isLoaded)) {
+            // 3. Secondary Fallback: Heuristic Bumper Plate Region Crop when dedicated plate model returns no hit
+            if (detectedPlate == null) {
                 detectedPlate = createHeuristicBumperPlateFallback(yolo, fullFrame)
             }
 
@@ -614,7 +614,7 @@ class OnnxImageAnalyzer(
                 val raw = it.rawLabel.lowercase().trim()
                 val isVeh = raw in VEHICLE_CLASSES
                 val isLockedMatch = (lockedId == null) || (it.id == lockedId) || activeTracks.any { trk -> trk.id == lockedId && trk.rawLabel.equals(raw, ignoreCase = true) }
-                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 70 && it.crop.height >= 50
+                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 40 && it.crop.height >= 25
             }
 
             val topVehicle = vehicleCandidates.maxWithOrNull(

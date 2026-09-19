@@ -222,19 +222,19 @@ class CaptureManager(
         val isPerson = raw == "person"
         val isVehicle = raw in VEHICLE_CLASSES
 
-        // Minimum crop size check: allow narrower vertical crops for people, animals, and vehicles going past
+        // Minimum crop size check: allow narrower vertical crops for people, animals, vehicles, and license plates
         val reqMinW = when {
+            isPlate -> minOf(minPlateCropWidth, 25)
             isAnimal -> 50
             isPerson -> 40
-            isVehicle -> 70
-            isPlate -> minPlateCropWidth
+            isVehicle -> 60
             else -> minCropWidth
         }
         val reqMinH = when {
+            isPlate -> minOf(minPlateCropHeight, 10)
             isAnimal -> 50
             isPerson -> 60
-            isVehicle -> 50
-            isPlate -> minPlateCropHeight
+            isVehicle -> 40
             else -> minCropHeight
         }
         if (bitmap.width < reqMinW || bitmap.height < reqMinH) return
@@ -244,10 +244,10 @@ class CaptureManager(
             return
         }
 
-        // Sharpness threshold check - animals, people, and vehicles get a relaxed floor (0.15f)
+        // Sharpness threshold check - plates, animals, people, and vehicles get a relaxed floor
         val effectiveMinSharpness = when {
-            isAnimal -> minOf(minSharpnessThreshold, 0.15f)
-            isPerson || isVehicle -> minOf(minSharpnessThreshold, 0.15f)
+            isPlate -> 0.08f
+            isAnimal || isPerson || isVehicle -> minOf(minSharpnessThreshold, 0.15f)
             else -> minSharpnessThreshold
         }
         val sharpnessScore = BestFrameSelector.calculateSharpnessScore(bitmap)
@@ -313,9 +313,9 @@ class CaptureManager(
                 )
             }
             
-            // Require same target detected for at least N frames (or 2 frames for animals/people/vehicles)
-            val requiredFrames = if (isAnimal || isPerson || isVehicle) minOf(minStableFrames, 2) else minStableFrames
-            val maxWaitMs = if (isAnimal || isPerson || isVehicle) 600L else 900L
+            // Require same target detected for at least N frames (or 2 frames for plates/animals/people/vehicles)
+            val requiredFrames = if (isPlate || isAnimal || isPerson || isVehicle) minOf(minStableFrames, 2) else minStableFrames
+            val maxWaitMs = if (isPlate || isAnimal || isPerson || isVehicle) 400L else 900L
             if (current.frameCount >= requiredFrames || now - current.firstSeen > maxWaitMs) {
                 val best = pendingCaptures.remove(id) ?: return
                 capturedIds[id] = now
