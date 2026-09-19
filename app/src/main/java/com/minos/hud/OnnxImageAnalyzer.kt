@@ -51,6 +51,7 @@ class OnnxImageAnalyzer(
     private var licensePlateDetector: LicensePlateDetector? = null
     private val captureManager = CaptureManager(context, onTriggerHighResCapture)
     private val captureExecutor = Executors.newSingleThreadExecutor()
+    private val plateExecutor = Executors.newSingleThreadExecutor()
 
     companion object {
         private const val MODEL_INPUT_SIZE = 640
@@ -242,7 +243,7 @@ class OnnxImageAnalyzer(
                         lastStagesLog = "stages: convert=${s1 - s0}ms pre=${s2 - s1}ms ort=${s3 - s2}ms post=${s4 - s3}ms track+plates=${s5 - s4}ms"
                         Log.i("OnnxImageAnalyzer", lastStagesLog)
 
-                        val inferenceTime = System.currentTimeMillis() - s0
+                        val inferenceTime = SystemClock.elapsedRealtime() - s0
                         val width = rotatedBitmap.width
                         val height = rotatedBitmap.height
 
@@ -481,150 +482,86 @@ class OnnxImageAnalyzer(
         return if (unionArea > 0f) interArea / unionArea else 0f
     }
 
-    private fun processLicensePlateIfVehicle(
-        yolo: YoloTarget,
-        plateTargets: MutableList<YoloTarget>,
-        allTargets: List<YoloTarget>,
-        fullFrame: Bitmap
+    private fun processLicensePlateIfVehicleAsync(
+        vehicle: YoloTarget,
+        fullWidth: Int,
+        fullHeight: Int,
+        lockedId: String?
     ) {
-        val raw = yolo.rawLabel.lowercase().trim()
-        if (raw in listOf("car", "bus", "truck", "motorcycle")) {
+        val vehicleCrop = vehicle.crop ?: return
+
+        plateExecutor.execute {
             var detectedPlate: YoloTarget? = null
-
-            // 1. Primary path: Dedicated License Plate Detector model (if loaded)
             val detector = licensePlateDetector
+
             if (detector != null && detector.isLoaded) {
-                yolo.crop?.let { vehicleCrop ->
-                    if (vehicleCrop.width >= 40 && vehicleCrop.height >= 20) {
-                        detector.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
-                            val p = plateResult.plateTarget
-                            val left = (yolo.xMin * fullFrame.width)
-                            val top = (yolo.yMin * fullFrame.height)
-                            val w = ((yolo.xMax - yolo.xMin) * fullFrame.width)
-                            val h = ((yolo.yMax - yolo.yMin) * fullFrame.height)
+                if (vehicleCrop.width >= 40 && vehicleCrop.height >= 20) {
+                    detector.detectAndCropPlate(vehicleCrop)?.let { plateResult ->
+                        val p = plateResult.plateTarget
+                        val left = (vehicle.xMin * fullWidth)
+                        val top = (vehicle.yMin * fullHeight)
+                        val w = ((vehicle.xMax - vehicle.xMin) * fullWidth)
+                        val h = ((vehicle.yMax - vehicle.yMin) * fullHeight)
 
-                            val padding = BestFrameSelector.getPaddingForLabel(yolo.rawLabel)
-                            val padX = w * padding
-                            val padY = h * padding
+                        val padding = BestFrameSelector.getPaddingForLabel(vehicle.rawLabel)
+                        val padX = w * padding
+                        val padY = h * padding
 
-                            val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
-                            val paddedTop = (top - padY).toInt().coerceAtLeast(0)
-                            val paddedRight = (left + w + padX).toInt().coerceAtMost(fullFrame.width - 1)
-                            val paddedBottom = (top + h + padY).toInt().coerceAtMost(fullFrame.height - 1)
+                        val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
+                        val paddedTop = (top - padY).toInt().coerceAtLeast(0)
+                        val paddedRight = (left + w + padX).toInt().coerceAtMost(fullWidth - 1)
+                        val paddedBottom = (top + h + padY).toInt().coerceAtMost(fullHeight - 1)
 
-                            val cropXMin = paddedLeft.toFloat() / fullFrame.width
-                            val cropYMin = paddedTop.toFloat() / fullFrame.height
-                            val cropW = (paddedRight - paddedLeft).toFloat() / fullFrame.width
-                            val cropH = (paddedBottom - paddedTop).toFloat() / fullFrame.height
+                        val cropXMin = paddedLeft.toFloat() / fullWidth
+                        val cropYMin = paddedTop.toFloat() / fullHeight
+                        val cropW = (paddedRight - paddedLeft).toFloat() / fullWidth
+                        val cropH = (paddedBottom - paddedTop).toFloat() / fullHeight
 
-                            detectedPlate = p.copy(
-                                xMin = cropXMin + p.xMin * cropW,
-                                yMin = cropYMin + p.yMin * cropH,
-                                xMax = cropXMin + p.xMax * cropW,
-                                yMax = cropYMin + p.yMax * cropH
-                            )
-                        }
+                        detectedPlate = p.copy(
+                            xMin = cropXMin + p.xMin * cropW,
+                            yMin = cropYMin + p.yMin * cropH,
+                            xMax = cropXMin + p.xMax * cropW,
+                            yMax = cropYMin + p.yMax * cropH,
+                            crop = plateResult.plateCrop
+                        )
                     }
                 }
             }
 
-            // 2. Primary Fallback: Main YOLO model's "plate" / "license_plate" class detections
-            if (detectedPlate == null) {
-                detectedPlate = findMainModelPlateTargetForVehicle(yolo, allTargets, fullFrame)
-            }
+            // Route successful plate crops straight to the event logger
+            detectedPlate?.let { plateTarget ->
+                plateTarget.crop?.let { bitmap ->
+                    if (!bitmap.isRecycled) {
+                        val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
+                        val plateId = "PLATE-${(plateTarget.xMin * 10).toInt()}-${(plateTarget.yMin * 10).toInt()}"
+                        val profile = getProfile()
+                        val qualityPreset = getQualityPreset()
 
-            // 3. Secondary Fallback: Heuristic Bumper Plate Region Crop when dedicated plate model returns no hit
-            if (detectedPlate == null) {
-                detectedPlate = createHeuristicBumperPlateFallback(yolo, fullFrame)
-            }
-
-            detectedPlate?.let { globalPlate ->
-                plateTargets.add(globalPlate)
+                        captureManager.processDetection(
+                            id = plateId,
+                            label = "LICENSE PLATE",
+                            category = EventCategory.PLATES,
+                            bitmap = bitmap,
+                            score = score,
+                            fullFrame = null, // Volatile frame omitted for thread safety
+                            xMin = plateTarget.xMin,
+                            yMin = plateTarget.yMin,
+                            xMax = plateTarget.xMax,
+                            yMax = plateTarget.yMax,
+                            rawLabel = "plate",
+                            lockedTrackId = lockedId,
+                            minStableFrames = qualityPreset.minStableFrames,
+                            minSharpnessThreshold = qualityPreset.minSharpnessScore,
+                            cooldownMs = profile.captureCooldownMs,
+                            minCropWidth = qualityPreset.minCropWidth,
+                            minCropHeight = qualityPreset.minCropHeight,
+                            minPlateCropWidth = qualityPreset.minPlateCropWidth,
+                            minPlateCropHeight = qualityPreset.minPlateCropHeight
+                        )
+                    }
+                }
             }
         }
-    }
-
-    private fun findMainModelPlateTargetForVehicle(
-        vehicle: YoloTarget,
-        allTargets: List<YoloTarget>,
-        fullFrame: Bitmap
-    ): YoloTarget? {
-        val plateCandidates = allTargets.filter { target ->
-            val raw = target.rawLabel.lowercase().trim()
-            raw in listOf("plate", "license_plate", "license plate", "license_plate_number")
-        }
-
-        if (plateCandidates.isEmpty()) return null
-
-        val vehicleXmin = vehicle.xMin - 0.05f
-        val vehicleYmin = vehicle.yMin - 0.05f
-        val vehicleXmax = vehicle.xMax + 0.05f
-        val vehicleYmax = vehicle.yMax + 0.05f
-
-        val matchingPlate = plateCandidates.firstOrNull { p ->
-            val pCx = (p.xMin + p.xMax) / 2f
-            val pCy = (p.yMin + p.yMax) / 2f
-            pCx >= vehicleXmin && pCx <= vehicleXmax && pCy >= vehicleYmin && pCy <= vehicleYmax
-        } ?: plateCandidates.maxByOrNull { it.confidence }
-
-        if (matchingPlate == null) return null
-
-        val plateCrop = matchingPlate.crop ?: try {
-            val left = (matchingPlate.xMin * fullFrame.width).toInt().coerceIn(0, fullFrame.width - 1)
-            val top = (matchingPlate.yMin * fullFrame.height).toInt().coerceIn(0, fullFrame.height - 1)
-            val w = ((matchingPlate.xMax - matchingPlate.xMin) * fullFrame.width).toInt().coerceIn(1, fullFrame.width - left)
-            val h = ((matchingPlate.yMax - matchingPlate.yMin) * fullFrame.height).toInt().coerceIn(1, fullFrame.height - top)
-            val cropped = Bitmap.createBitmap(fullFrame, left, top, w, h)
-            val res = cropped.copy(Bitmap.Config.ARGB_8888, false)
-            cropped.recycle()
-            res
-        } catch (e: Exception) {
-            null
-        }
-
-        return matchingPlate.copy(crop = plateCrop)
-    }
-
-    private fun createHeuristicBumperPlateFallback(
-        vehicle: YoloTarget,
-        fullFrame: Bitmap
-    ): YoloTarget? {
-        val vWidth = vehicle.xMax - vehicle.xMin
-        val vHeight = vehicle.yMax - vehicle.yMin
-
-        val plateXmin = (vehicle.xMin + vWidth * 0.25f).coerceIn(0f, 1f)
-        val plateXmax = (vehicle.xMin + vWidth * 0.75f).coerceIn(0f, 1f)
-        val plateYmin = (vehicle.yMin + vHeight * 0.55f).coerceIn(0f, 1f)
-        val plateYmax = (vehicle.yMin + vHeight * 0.82f).coerceIn(0f, 1f)
-
-        if (plateXmax <= plateXmin || plateYmax <= plateYmin) return null
-
-        val plateCrop = try {
-            val left = (plateXmin * fullFrame.width).toInt().coerceIn(0, fullFrame.width - 1)
-            val top = (plateYmin * fullFrame.height).toInt().coerceIn(0, fullFrame.height - 1)
-            val w = ((plateXmax - plateXmin) * fullFrame.width).toInt().coerceIn(1, fullFrame.width - left)
-            val h = ((plateYmax - plateYmin) * fullFrame.height).toInt().coerceIn(1, fullFrame.height - top)
-            if (w < 10 || h < 10) null else {
-                val cropped = Bitmap.createBitmap(fullFrame, left, top, w, h)
-                val res = cropped.copy(Bitmap.Config.ARGB_8888, false)
-                cropped.recycle()
-                res
-            }
-        } catch (e: Exception) {
-            null
-        } ?: return null
-
-        return YoloTarget(
-            id = "PLATE-FB-${vehicle.id}",
-            label = "LICENSE_PLATE",
-            rawLabel = "plate",
-            confidence = (vehicle.confidence * 0.75f).coerceIn(0.25f, 0.95f),
-            xMin = plateXmin,
-            yMin = plateYmin,
-            xMax = plateXmax,
-            yMax = plateYmax,
-            crop = plateCrop
-        )
     }
 
     private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap, startTime: Long): List<YoloTarget> {
@@ -661,7 +598,12 @@ class OnnxImageAnalyzer(
             if (topVehicle != null) {
                 lastPlateDetectionNs = nowNs
                 plateScansCount++
-                processLicensePlateIfVehicle(topVehicle, plateTargets, targets, fullFrame)
+                processLicensePlateIfVehicleAsync(
+                    vehicle = topVehicle,
+                    fullWidth = fullFrame.width,
+                    fullHeight = fullFrame.height,
+                    lockedId = lockedId
+                )
             } else if (licensePlateDetector?.isLoaded != true) {
                 // If dedicated plate detector is missing or not loaded, promote any main model plate targets
                 val mainModelPlates = targets.filter {
@@ -1009,6 +951,7 @@ class OnnxImageAnalyzer(
         ortSession?.close()
         licensePlateDetector?.close()
         captureExecutor.shutdown()
+        plateExecutor.shutdown()
         if (!letterboxBitmap.isRecycled) {
             letterboxBitmap.recycle()
         }

@@ -223,7 +223,8 @@ fun CaptureHUD(
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.horizontalScroll(rememberScrollState())
             ) {
                 IsolatedTelemetryDisplay(
                     fpsProvider = fpsProvider,
