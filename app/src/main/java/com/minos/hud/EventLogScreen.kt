@@ -43,9 +43,10 @@ fun EventLogScreen(onBack: () -> Unit) {
 
     val filteredEvents = events.filter { event ->
         val matchTab = when (selectedTab) {
-            0 -> event.category == EventCategory.PEOPLE_VEHICLES
-            1 -> event.category == EventCategory.ANIMALS
-            2 -> event.category == EventCategory.PLATES
+            0 -> event.category == EventCategory.PEOPLE
+            1 -> event.category == EventCategory.VEHICLES
+            2 -> event.category == EventCategory.ANIMALS
+            3 -> event.category == EventCategory.PLATES
             else -> true
         }
         val matchSearch = searchQuery.isBlank() || event.label.contains(searchQuery, ignoreCase = true)
@@ -102,10 +103,11 @@ fun EventLogScreen(onBack: () -> Unit) {
 
             // Tabs
             Row(modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                LogTab("PEOPLE (${events.count { it.category == EventCategory.PEOPLE_VEHICLES }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
-                LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
-                LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
-                LogTab("ALL (${events.size})", selectedTab == 3, Modifier.weight(1f)) { selectedTab = 3 }
+                LogTab("PEOPLE (${events.count { it.category == EventCategory.PEOPLE }})", selectedTab == 0, Modifier.weight(1f)) { selectedTab = 0 }
+                LogTab("VEHICLES (${events.count { it.category == EventCategory.VEHICLES }})", selectedTab == 1, Modifier.weight(1f)) { selectedTab = 1 }
+                LogTab("ANIMALS (${events.count { it.category == EventCategory.ANIMALS }})", selectedTab == 2, Modifier.weight(1f)) { selectedTab = 2 }
+                LogTab("PLATES (${events.count { it.category == EventCategory.PLATES }})", selectedTab == 3, Modifier.weight(1f)) { selectedTab = 3 }
+                LogTab("ALL (${events.size})", selectedTab == 4, Modifier.weight(1f)) { selectedTab = 4 }
             }
 
             OutlinedTextField(
@@ -264,7 +266,8 @@ fun EventItem(event: DetectedEvent, onClick: () -> Unit, onDelete: () -> Unit) {
 
                     Text(
                         text = when (event.category) {
-                            EventCategory.PEOPLE_VEHICLES -> "VEHICLE / PERSON"
+                            EventCategory.PEOPLE -> "PERSON"
+                            EventCategory.VEHICLES -> "VEHICLE"
                             EventCategory.ANIMALS -> "ANIMAL"
                             EventCategory.PLATES -> "LICENSE PLATE"
                         },

@@ -76,8 +76,8 @@ class OnnxImageAnalyzer(
     private var plateScansCount = 0
     private var expiredTracksCount = 0
 
-    private val trackIouThreshold = 0.25f
-    private val fallbackDistanceSquared = 0.04f
+    private val trackIouThreshold = 0.20f
+    private val fallbackDistanceSquared = 0.08f
 
     private val labels = listOf(
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
@@ -342,13 +342,10 @@ class OnnxImageAnalyzer(
                 continue
             }
 
-            val classThreshold = if (rawLower in ANIMAL_CLASSES) {
-                // Animals: floor at 0.20 (lower than default) so dogs/cats are detected,
-                // but the slider can still raise it to filter false positives.
-                sensitivity.coerceAtLeast(animalFloor)
-            } else {
-                // People / vehicles / objects: floor at 0.15 to reject noise.
-                sensitivity.coerceAtLeast(defaultFloor)
+            val classThreshold = when {
+                rawLower == "person" -> minOf(sensitivity, 0.20f)
+                rawLower in ANIMAL_CLASSES -> sensitivity.coerceAtLeast(animalFloor)
+                else -> sensitivity.coerceAtLeast(defaultFloor)
             }
 
             if (maxScore >= classThreshold) {
@@ -378,7 +375,10 @@ class OnnxImageAnalyzer(
         }
 
         val nmsSelected = nms(candidateTargets)
-        val finalTargets = nmsSelected.take(maxDetections).map { target ->
+        val personTargets = nmsSelected.filter { it.rawLabel.lowercase().trim() == "person" }
+        val otherTargets = nmsSelected.filter { it.rawLabel.lowercase().trim() != "person" }
+        val balancedTargets = (personTargets + otherTargets).distinctBy { it.id }.take(maxDetections)
+        val finalTargets = balancedTargets.map { target ->
             val left = (target.xMin * sourceBitmap.width)
             val top = (target.yMin * sourceBitmap.height)
             val w = ((target.xMax - target.xMin) * sourceBitmap.width)
@@ -612,9 +612,9 @@ class OnnxImageAnalyzer(
         if (profile.isPlateDetectorEnabled && (nowNs - lastPlateDetectionNs >= effectivePlateIntervalNs) && (getIsCaptureOn() || getAutoMag())) {
             val vehicleCandidates = targets.filter {
                 val raw = it.rawLabel.lowercase().trim()
-                val isVeh = raw in listOf("car", "bus", "truck", "motorcycle")
+                val isVeh = raw in VEHICLE_CLASSES
                 val isLockedMatch = (lockedId == null) || (it.id == lockedId) || activeTracks.any { trk -> trk.id == lockedId && trk.rawLabel.equals(raw, ignoreCase = true) }
-                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 160 && it.crop.height >= 100
+                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 70 && it.crop.height >= 50
             }
 
             val topVehicle = vehicleCandidates.maxWithOrNull(
@@ -686,8 +686,8 @@ class OnnxImageAnalyzer(
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
-                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-3.0f, 3.0f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-3.0f, 3.0f)
 
                 val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
                 val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
@@ -750,8 +750,8 @@ class OnnxImageAnalyzer(
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-1.5f, 1.5f)
-                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-1.5f, 1.5f)
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-3.0f, 3.0f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-3.0f, 3.0f)
 
                 val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
                 val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
@@ -777,10 +777,10 @@ class OnnxImageAnalyzer(
             }
         }
 
-        // 3. Expire unmatched tracks after 2 missed frames
+        // 3. Expire unmatched tracks after 4 missed frames
         for (unmatchedTrack in remainingActiveTracks) {
             val missed = unmatchedTrack.missedCount + 1
-            if (missed <= 2) {
+            if (missed <= 4) {
                 updatedTracks.add(unmatchedTrack.copy(missedCount = missed, vx = unmatchedTrack.vx * 0.85f, vy = unmatchedTrack.vy * 0.85f))
             } else {
                 expiredTracksCount++
@@ -821,7 +821,8 @@ class OnnxImageAnalyzer(
             updatedTracks.forEach { track ->
                 val raw = track.rawLabel.lowercase().trim()
                 val category = when {
-                    raw in VEHICLE_CLASSES || raw == "person" || raw == "bicycle" -> EventCategory.PEOPLE_VEHICLES
+                    raw == "person" -> EventCategory.PEOPLE
+                    raw in VEHICLE_CLASSES -> EventCategory.VEHICLES
                     raw in ANIMAL_CLASSES -> EventCategory.ANIMALS
                     else -> null
                 }

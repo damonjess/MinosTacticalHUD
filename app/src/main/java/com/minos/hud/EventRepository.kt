@@ -29,11 +29,17 @@ object EventRepository {
                 try {
                     val lines = file.readLines()
                     if (lines.size >= 5) {
+                        val categoryStr = lines[3]
+                        val parsedCategory = try {
+                            EventCategory.valueOf(categoryStr)
+                        } catch (e: Exception) {
+                            if (lines[1].contains("PERSON", ignoreCase = true)) EventCategory.PEOPLE else EventCategory.VEHICLES
+                        }
                         DetectedEvent(
                             id = lines[0],
                             label = lines[1],
                             timestamp = lines[2],
-                            category = EventCategory.valueOf(lines[3]),
+                            category = parsedCategory,
                             thumbnailPath = lines[4],
                             fullImagePath = if (lines.size > 5) lines[5] else null,
                             confidence = if (lines.size > 6) lines[6].toFloatOrNull() ?: 0f else 0f,

@@ -106,12 +106,12 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private val smoothedTracks = mutableListOf<SmoothedTrack>()
     private val maxTracks = 15
 
-    private val maxPredictionTime = 0.05f    // Cap prediction at 50ms to prevent drift
-    private val maxVelocity = 0.30f          // Max normalized velocity per second (prevents jump off targets)
-    private val velocityDecay = 0.70f        // Velocity decay without detections
-    private val maxMissedFrames = 2          // Expire tracks after 2 missed frames
-    private val maxLockedMissedFrames = 10   // Keep locked target predicting longer
-    private val matchDistanceThreshold = 0.12f
+    private val maxPredictionTime = 0.50f    // Extrapolate up to 500ms between AI inference passes
+    private val maxVelocity = 2.0f           // Allow fast vehicle tracking (up to 200% screen width/sec)
+    private val velocityDecay = 0.85f        // Smooth velocity decay without detections
+    private val maxMissedFrames = 3          // Expire tracks after 3 missed frames
+    private val maxLockedMissedFrames = 12   // Keep locked target predicting longer
+    private val matchDistanceThreshold = 0.30f
 
     fun setCameraSourceDimensions(width: Int, height: Int) {
         camSourceWidth = width.toFloat()
@@ -220,11 +220,10 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 val ecx = (existing.xMin + existing.xMax) / 2f
                 val ecy = (existing.yMin + existing.yMax) / 2f
 
-                // Deadband micro-jitter to prevent stationary targets (e.g. dogs lying down) from drifting
                 val diffX = tcx - ecx
                 val diffY = tcy - ecy
-                val rawVx = if (abs(diffX) > 0.012f) (diffX / dt) else 0f
-                val rawVy = if (abs(diffY) > 0.012f) (diffY / dt) else 0f
+                val rawVx = if (abs(diffX) > 0.002f) (diffX / dt) else 0f
+                val rawVy = if (abs(diffY) > 0.002f) (diffY / dt) else 0f
 
                 val newVx = rawVx.coerceIn(-maxVelocity, maxVelocity)
                 val newVy = rawVy.coerceIn(-maxVelocity, maxVelocity)
@@ -233,8 +232,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                 existing.yMin = existing.yMin * (1 - smoothingAlpha) + t.yMin * smoothingAlpha
                 existing.xMax = existing.xMax * (1 - smoothingAlpha) + t.xMax * smoothingAlpha
                 existing.yMax = existing.yMax * (1 - smoothingAlpha) + t.yMax * smoothingAlpha
-                existing.vx = existing.vx * 0.30f + newVx * 0.70f
-                existing.vy = existing.vy * 0.30f + newVy * 0.70f
+                existing.vx = existing.vx * 0.15f + newVx * 0.85f
+                existing.vy = existing.vy * 0.15f + newVy * 0.85f
                 existing.label = t.label
                 existing.rawLabel = t.rawLabel
                 existing.confidence = t.confidence

@@ -17,6 +17,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -26,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.abs
 
 @Composable
 fun MainContent(
@@ -54,6 +57,16 @@ fun MainContent(
         }
     }
 
+    LaunchedEffect(cameraControl, viewModel.digitalZoom) {
+        if (cameraControl != null) {
+            try {
+                cameraControl.setZoomRatio(viewModel.digitalZoom.coerceIn(1.0f, 8.0f))
+            } catch (e: Exception) {
+                Log.e("MainContent", "Error setting zoom ratio", e)
+            }
+        }
+    }
+
     LaunchedEffect(cameraControl, viewModel.exposureValue) {
         if (cameraControl != null && isExpSupported) {
             try {
@@ -65,7 +78,22 @@ fun MainContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, zoomFactor, _ ->
+                    val newZoom = (viewModel.digitalZoom * zoomFactor).coerceIn(1.0f, 8.0f)
+                    viewModel.digitalZoom = newZoom
+                    try {
+                        cameraControl?.setZoomRatio(newZoom)
+                    } catch (e: Exception) {
+                        Log.e("MainContent", "Error applying pinch zoom ratio", e)
+                    }
+                }
+            }
+    ) {
         AndroidView(
             factory = { ctx ->
                 PreviewView(ctx).apply {
@@ -432,6 +460,73 @@ fun CaptureHUD(
                     Spacer(modifier = Modifier.height(4.dp))
                 }
 
+                // Zoom Control Row with Quick Presets + Interactive Slider
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "ZOOM ${String.format("%.1f", viewModel.digitalZoom)}x",
+                        color = Color(0xFF00FF9D),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(68.dp)
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        listOf(1.0f, 2.0f, 4.0f, 8.0f).forEach { zoomVal ->
+                            Button(
+                                onClick = {
+                                    viewModel.digitalZoom = zoomVal
+                                    try {
+                                        cameraControl?.setZoomRatio(zoomVal)
+                                    } catch (e: Exception) {
+                                        Log.e("CaptureHUD", "Failed to set zoom ratio", e)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (abs(viewModel.digitalZoom - zoomVal) < 0.2f) Color(0xFF00FF9D) else Color(0x55000000)
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF00FF9D)),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 1.dp),
+                                modifier = Modifier.height(26.dp)
+                            ) {
+                                Text(
+                                    text = "${zoomVal.toInt()}x",
+                                    color = if (abs(viewModel.digitalZoom - zoomVal) < 0.2f) Color.Black else Color.White,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Slider(
+                        value = viewModel.digitalZoom.coerceIn(1.0f, 8.0f),
+                        onValueChange = {
+                            viewModel.digitalZoom = it
+                            try {
+                                cameraControl?.setZoomRatio(it)
+                            } catch (e: Exception) {
+                                Log.e("CaptureHUD", "Failed to set zoom ratio", e)
+                            }
+                        },
+                        valueRange = 1.0f..8.0f,
+                        modifier = Modifier.weight(1f),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color(0xFF00FF9D),
+                            activeTrackColor = Color(0xFF00FF9D)
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
                 val expState = cameraInfo?.exposureState
                 val isExpSupported = expState?.isExposureCompensationSupported == true
                 val expRange = expState?.exposureCompensationRange
@@ -457,14 +552,6 @@ fun CaptureHUD(
                     ) {
                         Text("TORCH", color = if (viewModel.isTorchEnabled) Color.Black else Color.White, fontSize = 10.sp)
                     }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "${String.format("%.1f", viewModel.digitalZoom)}x",
-                        color = Color(0xFF00FF9D),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
                     Spacer(modifier = Modifier.width(10.dp))
 
                     val currentExpIdx = viewModel.exposureValue.toInt().coerceIn(minExp.toInt(), maxExp.toInt())
@@ -578,7 +665,7 @@ fun IsolatedTelemetryDisplay(
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
         Text(
-            text = "FPS:${fpsProvider()}",
+            text = "AI FPS:${fpsProvider()}",
             color = Color(0xFF00FF9D),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,

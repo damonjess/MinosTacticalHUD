@@ -171,6 +171,7 @@ class CaptureManager(
 ) {
     private val pendingCaptures = mutableMapOf<String, BestFrame>()
     private val capturedIds = mutableMapOf<String, Long>()
+    private val spatialCapturedTimes = mutableMapOf<String, Long>()
     private val isCapturing = mutableSetOf<String>()
 
     data class BestFrame(
@@ -218,25 +219,55 @@ class CaptureManager(
         val raw = (if (rawLabel.isNotEmpty()) rawLabel else label).lowercase().trim()
         val isPlate = raw in listOf("plate", "license_plate", "license plate")
         val isAnimal = raw in ANIMAL_CLASSES
+        val isPerson = raw == "person"
+        val isVehicle = raw in VEHICLE_CLASSES
 
-        // Feature 4 Rule 3: Minimum crop size check - allow smaller/horizontal crops for animals
-        val reqMinW = if (isAnimal) 60 else if (isPlate) minPlateCropWidth else minCropWidth
-        val reqMinH = if (isAnimal) 60 else if (isPlate) minPlateCropHeight else minCropHeight
+        // Minimum crop size check: allow narrower vertical crops for people, animals, and vehicles going past
+        val reqMinW = when {
+            isAnimal -> 50
+            isPerson -> 40
+            isVehicle -> 70
+            isPlate -> minPlateCropWidth
+            else -> minCropWidth
+        }
+        val reqMinH = when {
+            isAnimal -> 50
+            isPerson -> 60
+            isVehicle -> 50
+            isPlate -> minPlateCropHeight
+            else -> minCropHeight
+        }
         if (bitmap.width < reqMinW || bitmap.height < reqMinH) return
 
-        // Feature 4 Rule 5: Exposure problem check
+        // Exposure problem check
         if (!BestFrameSelector.checkExposure(bitmap)) {
             return
         }
 
-        // Feature 4 Rule 4: Sharpness threshold check - animals with soft fur get a relaxed floor (0.15f)
-        val effectiveMinSharpness = if (isAnimal) minOf(minSharpnessThreshold, 0.15f) else minSharpnessThreshold
+        // Sharpness threshold check - animals, people, and vehicles get a relaxed floor (0.15f)
+        val effectiveMinSharpness = when {
+            isAnimal -> minOf(minSharpnessThreshold, 0.15f)
+            isPerson || isVehicle -> minOf(minSharpnessThreshold, 0.15f)
+            else -> minSharpnessThreshold
+        }
         val sharpnessScore = BestFrameSelector.calculateSharpnessScore(bitmap)
         if (sharpnessScore < effectiveMinSharpness) {
             return
         }
 
         val now = System.currentTimeMillis()
+
+        // Spatial location key to prevent logging duplicate events for stationary/parked targets
+        val centerX = (xMin + xMax) / 2f
+        val centerY = (yMin + yMax) / 2f
+        val gridX = (centerX / 0.12f).toInt()
+        val gridY = (centerY / 0.12f).toInt()
+        val spatialKey = "${raw}_${gridX}_${gridY}"
+
+        // Shortened spatial cooldown (4 seconds) so multiple vehicles/people going past are successfully logged
+        val spatialCooldownMs = 4_000L
+        val lastSpatialTime = spatialCapturedTimes[spatialKey] ?: 0L
+        if (now - lastSpatialTime < spatialCooldownMs) return
         
         // Feature 4 Rule 6: Target cooldown check
         if (capturedIds[id] != null && now - capturedIds[id]!! < cooldownMs) return
@@ -282,12 +313,13 @@ class CaptureManager(
                 )
             }
             
-            // Feature 4 Rule 1: Require same target detected for at least N frames (or 2 frames for animals)
-            val requiredFrames = if (isAnimal) minOf(minStableFrames, 2) else minStableFrames
-            val maxWaitMs = if (isAnimal) 400L else 900L
+            // Require same target detected for at least N frames (or 2 frames for animals/people/vehicles)
+            val requiredFrames = if (isAnimal || isPerson || isVehicle) minOf(minStableFrames, 2) else minStableFrames
+            val maxWaitMs = if (isAnimal || isPerson || isVehicle) 600L else 900L
             if (current.frameCount >= requiredFrames || now - current.firstSeen > maxWaitMs) {
                 val best = pendingCaptures.remove(id) ?: return
                 capturedIds[id] = now
+                spatialCapturedTimes[spatialKey] = now
 
                 // Grab recent frames for clip
                 val framesForClip = VideoBuffer.getRecentFrames()

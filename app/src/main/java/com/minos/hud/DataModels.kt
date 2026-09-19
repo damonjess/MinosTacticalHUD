@@ -3,7 +3,7 @@ package com.minos.hud
 import android.graphics.Bitmap
 
 enum class EventCategory {
-    PEOPLE_VEHICLES, ANIMALS, PLATES
+    PEOPLE, VEHICLES, ANIMALS, PLATES
 }
 
 /**
