@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var stillExecutor: ExecutorService
     private var cameraControl by mutableStateOf<CameraControl?>(null)
     private var cameraInfo by mutableStateOf<CameraInfo?>(null)
     private var imageCapture: ImageCapture? = null
@@ -61,6 +62,7 @@ class MainActivity : ComponentActivity() {
         setupHighPerformanceMode()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        stillExecutor = Executors.newSingleThreadExecutor()
 
         imageAnalyzer = OnnxImageAnalyzer(
             context = this,
@@ -84,7 +86,7 @@ class MainActivity : ComponentActivity() {
                 if (capture != null) {
                     try {
                         capture.takePicture(
-                            cameraExecutor,
+                            stillExecutor,
                             object : ImageCapture.OnImageCapturedCallback() {
                                 override fun onCaptureSuccess(imageProxy: ImageProxy) {
                                     try {
@@ -133,12 +135,14 @@ class MainActivity : ComponentActivity() {
                     onCaptured(null)
                 }
             },
-            onTargetsDetected = { magTargets, yoloTargets, inferenceTimeMs, rotatedWidth, rotatedHeight ->
+            onBoxesReady = { yoloTargets, frameTimeMs, rotatedWidth, rotatedHeight ->
+                hudOverlay?.setCameraSourceDimensions(rotatedWidth, rotatedHeight)
+                hudOverlay?.updateTargets(yoloTargets, frameTimeMs)
+            },
+            onTargetsDetected = { magTargets, _, inferenceTimeMs, _, _ ->
                 viewModel.updateTrackedTargets(magTargets)
                 viewModel.inferenceValue = inferenceTimeMs
-                hudOverlay?.setCameraSourceDimensions(rotatedWidth, rotatedHeight)
                 hudOverlay?.magTrackTargets = magTargets
-                hudOverlay?.updateTargets(yoloTargets)
             },
             onFpsUpdated = { fps ->
                 viewModel.fpsValue = fps
@@ -274,6 +278,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         imageAnalyzer?.close()
         cameraExecutor.shutdown()
+        stillExecutor.shutdown()
         VideoBuffer.clear()
     }
 }

@@ -11,6 +11,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.camera.core.ExperimentalGetImage
@@ -36,6 +37,7 @@ class OnnxImageAnalyzer(
     private val getQualityPreset: () -> QualitySpeedPreset = { QualitySpeedPreset.BALANCED },
     private val getLockedTrackId: () -> String? = { null },
     private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null,
+    private val onBoxesReady: (yoloTargets: List<YoloTarget>, frameTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onFpsUpdated: (fps: Int) -> Unit,
     private val onModelLoadError: ((String) -> Unit)? = null
@@ -67,6 +69,8 @@ class OnnxImageAnalyzer(
 
     private var lastFpsUpdateTime = 0L
     private var frameCount = 0
+
+    private var lastThumbCropMs = 0L
 
     private var lastTrackUpdateNs = 0L
     private var lastPlateDetectionNs = 0L
@@ -152,6 +156,9 @@ class OnnxImageAnalyzer(
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         val startTime = System.currentTimeMillis()
+        val nowRt = SystemClock.elapsedRealtime()
+        val ageNs = SystemClock.elapsedRealtimeNanos() - imageProxy.imageInfo.timestamp
+        val frameTimeMs = if (ageNs in 0L..400_000_000L) nowRt - ageNs / 1_000_000L else nowRt
 
         mainHandler.post { updateFps() }
 
@@ -185,8 +192,6 @@ class OnnxImageAnalyzer(
         } else {
             rawBitmap
         }
-        
-        VideoBuffer.addFrame(rotatedBitmap)
 
         val letterboxInfo = preprocessLetterbox(rotatedBitmap)
         val env = ortEnv ?: run {
@@ -209,7 +214,11 @@ class OnnxImageAnalyzer(
                     if (outputs != null) {
                         val sensitivity = getSensitivityThreshold()
                         val maxDet = getMaxDetections()
-                        val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
+                        val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet) { boxes ->
+                            val w = rotatedBitmap.width
+                            val h = rotatedBitmap.height
+                            mainHandler.post { onBoxesReady(boxes, frameTimeMs, w, h) }
+                        }.toMutableList()
 
                         val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, startTime)
                         targets.addAll(plateTargets)
@@ -224,6 +233,7 @@ class OnnxImageAnalyzer(
                         mainHandler.post {
                             onTargetsDetected(magTracksCopy, yoloTargetsCopy, inferenceTime, width, height)
                         }
+                        VideoBuffer.addFrame(rotatedBitmap)
                     }
                 } finally {
                     outputs.close()
@@ -279,7 +289,8 @@ class OnnxImageAnalyzer(
         sourceBitmap: Bitmap,
         info: LetterboxInfo,
         sensitivityThreshold: Float,
-        maxDetections: Int
+        maxDetections: Int,
+        onBoxes: (List<YoloTarget>) -> Unit
     ): List<YoloTarget> {
         val outputTensor = outputs.get(0) as OnnxTensor
         val buffer = outputTensor.floatBuffer
@@ -378,6 +389,13 @@ class OnnxImageAnalyzer(
         val personTargets = nmsSelected.filter { it.rawLabel.lowercase().trim() == "person" }
         val otherTargets = nmsSelected.filter { it.rawLabel.lowercase().trim() != "person" }
         val balancedTargets = (personTargets + otherTargets).distinctBy { it.id }.take(maxDetections)
+
+        onBoxes(balancedTargets.map { it.copy(label = getTacticalLabel(it.rawLabel)) })
+
+        val nowMs = SystemClock.elapsedRealtime()
+        val thumbDue = nowMs - lastThumbCropMs >= 500
+        if (thumbDue) lastThumbCropMs = nowMs
+
         val finalTargets = balancedTargets.map { target ->
             val left = (target.xMin * sourceBitmap.width)
             val top = (target.yMin * sourceBitmap.height)
@@ -399,7 +417,7 @@ class OnnxImageAnalyzer(
 
             // Conditional crop allocation to eliminate GC memory churn
             val isVehicle = target.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
-            val needsCrop = getIsCaptureOn() || getAutoMag() || isVehicle
+            val needsCrop = getIsCaptureOn() || getAutoMag() || (isVehicle && thumbDue)
 
             val crop = if (needsCrop) {
                 try {
