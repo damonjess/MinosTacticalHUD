@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 object BestFrameSelector {
@@ -169,10 +170,62 @@ class CaptureManager(
     private val context: Context,
     private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null
 ) {
-    private val pendingCaptures = mutableMapOf<String, BestFrame>()
-    private val capturedIds = mutableMapOf<String, Long>()
-    private val spatialCapturedTimes = mutableMapOf<String, Long>()
-    private val isCapturing = mutableSetOf<String>()
+    private val pendingCaptures = ConcurrentHashMap<String, BestFrame>()
+    private val capturedIds = ConcurrentHashMap<String, Long>()
+    private val spatialCapturedTimes = ConcurrentHashMap<String, Long>()
+    private val isCapturing = ConcurrentHashMap.newKeySet<String>()
+    private var lastPruneTime = 0L
+
+    private fun pruneStaleEntries(now: Long) {
+        if (now - lastPruneTime < 10_000L) return
+        lastPruneTime = now
+
+        capturedIds.entries.removeIf { now - it.value > 120_000L }
+        spatialCapturedTimes.entries.removeIf { now - it.value > 120_000L }
+
+        val stalePending = pendingCaptures.entries.filter { now - it.value.firstSeen > 5_000L }
+        for (entry in stalePending) {
+            pendingCaptures.remove(entry.key)?.let { best ->
+                try { best.bitmap.recycle() } catch (_: Exception) {}
+                try { best.fullFrame?.recycle() } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun shouldCapture(
+        id: String,
+        rawLabel: String,
+        xMin: Float,
+        yMin: Float,
+        xMax: Float,
+        yMax: Float,
+        cooldownMs: Long = 8000L
+    ): Boolean {
+        val now = System.currentTimeMillis()
+        pruneStaleEntries(now)
+
+        // Best-frame selection window: always continue providing candidate crops for active pending targets
+        if (pendingCaptures.containsKey(id)) {
+            return true
+        }
+
+        val raw = rawLabel.lowercase().trim()
+        val centerX = (xMin + xMax) / 2f
+        val centerY = (yMin + yMax) / 2f
+        val gridX = (centerX / 0.12f).toInt()
+        val gridY = (centerY / 0.12f).toInt()
+        val spatialKey = "${raw}_${gridX}_${gridY}"
+
+        val spatialCooldownMs = 4_000L
+        val lastSpatialTime = spatialCapturedTimes[spatialKey] ?: 0L
+        if (now - lastSpatialTime < spatialCooldownMs) return false
+
+        val lastCap = capturedIds[id]
+        if (lastCap != null && now - lastCap < cooldownMs) return false
+        if (isCapturing.contains(id)) return false
+
+        return true
+    }
 
     data class BestFrame(
         val bitmap: Bitmap,

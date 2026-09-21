@@ -437,7 +437,18 @@ class OnnxImageAnalyzer(
 
             // Conditional crop allocation to eliminate GC memory churn
             val isVehicle = target.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
-            val needsCrop = getIsCaptureOn() || getAutoMag() || (isVehicle && thumbDue)
+            val profile = getProfile()
+            val isCaptureOrAuto = getIsCaptureOn() || getAutoMag()
+            val candidateForCapture = isCaptureOrAuto && captureManager.shouldCapture(
+                id = target.id,
+                rawLabel = target.rawLabel,
+                xMin = target.xMin,
+                yMin = target.yMin,
+                xMax = target.xMax,
+                yMax = target.yMax,
+                cooldownMs = profile.captureCooldownMs
+            )
+            val needsCrop = candidateForCapture || (isVehicle && thumbDue)
 
             val crop = if (needsCrop) {
                 try {
