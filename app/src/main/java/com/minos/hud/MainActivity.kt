@@ -64,7 +64,6 @@ class MainActivity : ComponentActivity() {
         Configuration.getInstance().userAgentValue = packageName
 
         enableEdgeToEdge()
-        setupHighPerformanceMode()
 
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MinosHUD::InferenceWakeLock").apply {
@@ -231,6 +230,7 @@ class MainActivity : ComponentActivity() {
     ) { permissions ->
         val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
         if (cameraGranted) {
+            setupHighPerformanceMode()
             startHighPerformanceCamera()
         } else {
             finish()
@@ -248,6 +248,7 @@ class MainActivity : ComponentActivity() {
         }
 
         if (missingPermissions.isEmpty()) {
+            setupHighPerformanceMode()
             startHighPerformanceCamera()
         } else {
             requestPermissionLauncher.launch(permissions)

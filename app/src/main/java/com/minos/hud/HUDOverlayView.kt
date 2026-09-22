@@ -12,6 +12,10 @@ import kotlin.math.hypot
 import kotlin.math.max
  
 class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
+
+    init {
+        isClickable = true
+    }
  
     private val vehiclePaint = Paint().apply {
         color = Color.parseColor("#00FF66")
@@ -112,7 +116,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         var dCx: Float = cx, var dCy: Float = cy,         // displayed centre
         var dW: Float = w, var dH: Float = h,             // displayed size
         var missedCount: Int = 0,
-        var framesTracked: Int = 1
+        var framesTracked: Int = 1,
+        var hitCount: Int = 1
     ) {
         val sizePct: Float get() = w * h * 100f
     }
@@ -156,24 +161,24 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             performClick()
             val vWidth = width.toFloat()
             val vHeight = height.toFloat()
-            if (vWidth == 0f || vHeight == 0f) return false
- 
+            if (vWidth == 0f || vHeight == 0f) return true
+
             val scale = max(vWidth / camSourceWidth, vHeight / camSourceHeight)
             val scaledW = camSourceWidth * scale
             val scaledH = camSourceHeight * scale
             val dx = (vWidth - scaledW) / 2f
             val dy = (vHeight - scaledH) / 2f
- 
+
             val tapX = event.x
             val tapY = event.y
- 
+
             // Find closest track that contains the tap point
             var bestTrackId: String? = null
             var bestDist = Float.MAX_VALUE
- 
+
             for (track in tracks) {
                 boxToScreen(track, scaledW, scaledH, dx, dy, tmpRect)
- 
+
                 // Expand touch area slightly
                 val padding = 40f
                 if (tapX in (tmpRect.left - padding)..(tmpRect.right + padding) &&
@@ -188,17 +193,17 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     }
                 }
             }
- 
+
             if (bestTrackId != null) {
                 lockedTrackId = bestTrackId
                 onTargetLocked?.invoke(true)
                 onTargetLockedId?.invoke(bestTrackId)
                 postInvalidate()
-                return true
             } else {
                 releaseTarget()
                 onTapFocus?.invoke(tapX, tapY)
             }
+            return true
         }
         return super.onTouchEvent(event)
     }
@@ -276,6 +281,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             tr.confidence = d.confidence
             tr.missedCount = 0
             tr.framesTracked++
+            tr.hitCount++
         }
  
         // ---- 3. Age out unmatched tracks ----
@@ -308,7 +314,8 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
                     cy = (d.yMin + d.yMax) / 2f,
                     w = d.xMax - d.xMin,
                     h = d.yMax - d.yMin,
-                    frameTimeMs = frameTimeMs
+                    frameTimeMs = frameTimeMs,
+                    hitCount = 1
                 )
             )
         }
@@ -381,11 +388,17 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val dy = (vHeight - scaledH) / 2f
  
         val safeTop = 260f // Safe area below top controls bar
- 
+        val minHits = 3
+
         if (isYoloBoxesEnabled) {
             for (track in tracks) {
                 // If we are locked onto a track, only draw that track
                 if (lockedTrackId != null && track.id != lockedTrackId) {
+                    continue
+                }
+
+                // SORT rule: Only draw tracks that have matured
+                if (track.hitCount < minHits && track.id != lockedTrackId) {
                     continue
                 }
  

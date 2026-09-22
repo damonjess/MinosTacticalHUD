@@ -107,8 +107,10 @@ object EventRepository {
 
         // Save the expanded event image as the original resolution crop so VIEW FULL
         // stays zoomed in on the detected subject with full original quality.
+        // Or if fullFrame is passed from high-res capture, it will be the full HQ photo.
+        val imageToSave = fullFrame ?: bitmap
         FileOutputStream(fullFile).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            imageToSave.compress(Bitmap.CompressFormat.JPEG, 95, out)
         }
 
         val metadataFile = File(eventDir, "$id.metadata")

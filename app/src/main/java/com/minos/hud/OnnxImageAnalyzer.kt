@@ -38,7 +38,7 @@ class OnnxImageAnalyzer(
     private val getProfile: () -> TrackingProfile = { TrackingProfile.OUTDOOR },
     private val getQualityPreset: () -> QualitySpeedPreset = { QualitySpeedPreset.BALANCED },
     private val getLockedTrackId: () -> String? = { null },
-    private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null,
+    private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)?= null,
     private val onBoxesReady: (yoloTargets: List<YoloTarget>, frameTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onTargetsDetected: (magTargets: List<MagTrackTarget>, yoloTargets: List<YoloTarget>, inferenceTimeMs: Long, rotatedWidth: Int, rotatedHeight: Int) -> Unit,
     private val onFpsUpdated: (fps: Int) -> Unit,
@@ -701,7 +701,8 @@ class OnnxImageAnalyzer(
                     vx = newVx,
                     vy = newVy,
                     lastUpdateNs = nowNs,
-                    missedCount = 0
+                    missedCount = 0,
+                    hitCount = matchedTrack.hitCount + 1
                 )
                 updatedTracks.add(updatedTrack)
                 assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
@@ -766,7 +767,8 @@ class OnnxImageAnalyzer(
                     vx = newVx,
                     vy = newVy,
                     lastUpdateNs = nowNs,
-                    missedCount = 0
+                    missedCount = 0,
+                    hitCount = matchedTrack.hitCount + 1
                 )
                 updatedTracks.add(updatedTrack)
                 assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
@@ -806,7 +808,8 @@ class OnnxImageAnalyzer(
                 vx = 0f,
                 vy = 0f,
                 lastUpdateNs = nowNs,
-                missedCount = 0
+                missedCount = 0,
+                hitCount = 1
             )
             updatedTracks.add(newTrack)
             assignedYoloTargets.add(yolo.copy(id = trackId, label = getTacticalLabel(yolo.rawLabel)))
@@ -814,7 +817,13 @@ class OnnxImageAnalyzer(
 
         val w = fullFrame.width
         val h = fullFrame.height
-        mainHandler.post { onBoxesReady(assignedYoloTargets, frameTimeMs, w, h) }
+        val minHits = 3
+        val matureTracksForUi = updatedTracks.filter { it.hitCount >= minHits || it.id == lockedId }
+        val matureAssignedTargets = assignedYoloTargets.filter { yoloTarget -> 
+            matureTracksForUi.any { it.id == yoloTarget.id }
+        }
+        
+        mainHandler.post { onBoxesReady(matureAssignedTargets, frameTimeMs, w, h) }
 
         val nowRt = SystemClock.elapsedRealtime()
         val thumbDue = nowRt - lastThumbCropMs >= 500
@@ -859,8 +868,11 @@ class OnnxImageAnalyzer(
             activeTracks.addAll(finalUpdatedTracks)
         }
 
+        // Only process mature tracks for auto capture
+        val matureFinalUpdatedTracks = finalUpdatedTracks.filter { it.hitCount >= minHits || it.id == lockedId }
+
         if (getIsCaptureOn()) {
-            finalUpdatedTracks.forEach { track ->
+            matureFinalUpdatedTracks.forEach { track ->
                 val raw = track.rawLabel.lowercase().trim()
                 val category = when {
                     raw == "person" -> EventCategory.PEOPLE
