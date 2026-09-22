@@ -1,7 +1,10 @@
 package com.minos.hud
 
+import android.content.Context
+import android.content.ContextWrapper
 import org.junit.Assert.*
 import org.junit.Test
+import java.lang.reflect.Proxy
 
 class FeaturesUnitTest {
 
@@ -170,5 +173,59 @@ class FeaturesUnitTest {
     fun testVehicleClassesContainsAllCocoVehicles() {
         val expected = setOf("bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat")
         assertEquals(expected, VEHICLE_CLASSES)
+    }
+
+    @Test
+    fun testShouldCaptureLockFilteringAndAtomicReservation() {
+        val dummyContext = ContextWrapper(null)
+        val captureManager = CaptureManager(dummyContext)
+
+        // 1. Initial capture allowed
+        val allowed1 = captureManager.shouldCapture(
+            id = "TRK-1",
+            rawLabel = "car",
+            xMin = 0.1f, yMin = 0.1f, xMax = 0.3f, yMax = 0.3f,
+            cooldownMs = 8000L,
+            lockedTrackId = null
+        )
+        assertTrue(allowed1)
+
+        // 2. Best-frame window / atomic reservation: consecutive calls within collection window return true
+        val allowed2 = captureManager.shouldCapture(
+            id = "TRK-1",
+            rawLabel = "car",
+            xMin = 0.1f, yMin = 0.1f, xMax = 0.3f, yMax = 0.3f,
+            cooldownMs = 8000L,
+            lockedTrackId = null
+        )
+        assertTrue(allowed2)
+
+        // 3. Locked-ID matching: when TRK-1 is locked, TRK-1 and PLATE-TRK-1 pass, TRK-2 fails
+        val lockedPassTarget = captureManager.shouldCapture(
+            id = "TRK-1",
+            rawLabel = "car",
+            xMin = 0.1f, yMin = 0.1f, xMax = 0.3f, yMax = 0.3f,
+            cooldownMs = 8000L,
+            lockedTrackId = "TRK-1"
+        )
+        assertTrue(lockedPassTarget)
+
+        val lockedPassPlate = captureManager.shouldCapture(
+            id = "PLATE-TRK-1",
+            rawLabel = "plate",
+            xMin = 0.15f, yMin = 0.15f, xMax = 0.25f, yMax = 0.2f,
+            cooldownMs = 8000L,
+            lockedTrackId = "TRK-1"
+        )
+        assertTrue(lockedPassPlate)
+
+        val lockedOtherTarget = captureManager.shouldCapture(
+            id = "TRK-2",
+            rawLabel = "car",
+            xMin = 0.5f, yMin = 0.5f, xMax = 0.8f, yMax = 0.8f,
+            cooldownMs = 8000L,
+            lockedTrackId = "TRK-1"
+        )
+        assertFalse(lockedOtherTarget)
     }
 }

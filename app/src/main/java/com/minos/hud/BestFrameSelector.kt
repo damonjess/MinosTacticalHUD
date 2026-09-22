@@ -171,6 +171,7 @@ class CaptureManager(
     private val onTriggerHighResCapture: ((xMin: Float, yMin: Float, xMax: Float, yMax: Float, padding: Float, onCaptured: (Bitmap?) -> Unit) -> Unit)? = null
 ) {
     private val pendingCaptures = ConcurrentHashMap<String, BestFrame>()
+    private val intentReservations = ConcurrentHashMap<String, Long>()
     private val capturedIds = ConcurrentHashMap<String, Long>()
     private val spatialCapturedTimes = ConcurrentHashMap<String, Long>()
     private val isCapturing = ConcurrentHashMap.newKeySet<String>()
@@ -182,6 +183,7 @@ class CaptureManager(
 
         capturedIds.entries.removeIf { now - it.value > 120_000L }
         spatialCapturedTimes.entries.removeIf { now - it.value > 120_000L }
+        intentReservations.entries.removeIf { now - it.value > 5_000L }
 
         val stalePending = pendingCaptures.entries.filter { now - it.value.firstSeen > 5_000L }
         for (entry in stalePending) {
@@ -192,6 +194,13 @@ class CaptureManager(
         }
     }
 
+    private fun isLockedMatch(id: String, lockedId: String): Boolean {
+        if (id == lockedId) return true
+        val cleanId = id.removePrefix("PLATE-")
+        val cleanLocked = lockedId.removePrefix("PLATE-")
+        return cleanId == cleanLocked
+    }
+
     fun shouldCapture(
         id: String,
         rawLabel: String,
@@ -199,13 +208,19 @@ class CaptureManager(
         yMin: Float,
         xMax: Float,
         yMax: Float,
-        cooldownMs: Long = 8000L
+        cooldownMs: Long = 8000L,
+        lockedTrackId: String? = null
     ): Boolean {
         val now = System.currentTimeMillis()
         pruneStaleEntries(now)
 
+        // Feature 2: Tap-to-lock filtering
+        if (lockedTrackId != null && !isLockedMatch(id, lockedTrackId)) {
+            return false
+        }
+
         // Best-frame selection window: always continue providing candidate crops for active pending targets
-        if (pendingCaptures.containsKey(id)) {
+        if (pendingCaptures.containsKey(id) || intentReservations.containsKey(id)) {
             return true
         }
 
@@ -224,7 +239,18 @@ class CaptureManager(
         if (lastCap != null && now - lastCap < cooldownMs) return false
         if (isCapturing.contains(id)) return false
 
-        return true
+        // Atomically reserve the slot to prevent duplicate initial crops from slipping through
+        var reserved = false
+        intentReservations.compute(id) { _, existingTime ->
+            if (existingTime != null && now - existingTime < cooldownMs) {
+                existingTime
+            } else {
+                reserved = true
+                now
+            }
+        }
+
+        return reserved
     }
 
     data class BestFrame(
@@ -265,7 +291,7 @@ class CaptureManager(
         minPlateCropHeight: Int = 30
     ) {
         // Feature 2: Tap-to-lock filtering - if a target is locked, ignore captures for other targets
-        if (lockedTrackId != null && !id.startsWith(lockedTrackId) && !lockedTrackId.startsWith(id)) {
+        if (lockedTrackId != null && !isLockedMatch(id, lockedTrackId)) {
             return
         }
 
@@ -371,6 +397,7 @@ class CaptureManager(
             val maxWaitMs = if (isPlate || isAnimal || isPerson || isVehicle) 400L else 900L
             if (current.frameCount >= requiredFrames || now - current.firstSeen > maxWaitMs) {
                 val best = pendingCaptures.remove(id) ?: return
+                intentReservations.remove(id)
                 capturedIds[id] = now
                 spatialCapturedTimes[spatialKey] = now
 

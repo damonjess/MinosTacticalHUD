@@ -40,7 +40,7 @@ class LicensePlateDetector(
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                 setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
                 try {
-                    addXnnpack(mapOf("intra_op_num_threads" to "4"))
+                    // addXnnpack(mapOf("intra_op_num_threads" to "4"))
                 } catch (e: Throwable) {
                     // XNNPACK provider unsupported or omitted in build
                 }

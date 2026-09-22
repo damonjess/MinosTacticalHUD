@@ -1,10 +1,13 @@
 package com.minos.hud
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.preference.PreferenceManager
 import android.util.Log
 import android.util.Size
@@ -48,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private var hudOverlay: HUDOverlayView? = null
     private var previewView by mutableStateOf<PreviewView?>(null)
     private var imageAnalyzer: OnnxImageAnalyzer? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +65,33 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setupHighPerformanceMode()
+
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MinosHUD::InferenceWakeLock").apply {
+            acquire(30 * 60 * 1000L)
+        }
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            thermalListener = PowerManager.OnThermalStatusChangedListener { status ->
+                val isThrottling = status >= PowerManager.THERMAL_STATUS_MODERATE
+                if (isThrottling) {
+                    if (wakeLock?.isHeld == true) {
+                        wakeLock?.release()
+                        Log.i("MainActivity", "Thermal throttling: releasing wake lock (status=$status)")
+                    }
+                    toggleSustainedPerformanceMode(false)
+                } else {
+                    if (wakeLock?.isHeld == false) {
+                        wakeLock?.acquire(30 * 60 * 1000L)
+                        Log.i("MainActivity", "Thermal recovered: acquiring wake lock (status=$status)")
+                    }
+                    toggleSustainedPerformanceMode(true)
+                }
+            }
+            powerManager.addThermalStatusListener(thermalListener!!)
+            // Explicitly apply initial state since listener only fires on changes
+            thermalListener!!.onThermalStatusChanged(powerManager.currentThermalStatus)
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         stillExecutor = Executors.newSingleThreadExecutor()
@@ -224,6 +256,7 @@ class MainActivity : ComponentActivity() {
 
     private fun setupHighPerformanceMode() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        toggleSustainedPerformanceMode(true)
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
@@ -231,6 +264,19 @@ class MainActivity : ComponentActivity() {
             or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
         )
+    }
+
+    private fun toggleSustainedPerformanceMode(enable: Boolean) {
+        try {
+            if (packageManager.hasSystemFeature("android.hardware.sustained_performance_mode")) {
+                window.setSustainedPerformanceMode(enable)
+                Log.i("MainActivity", "Sustained performance mode set to: $enable")
+            } else {
+                Log.i("MainActivity", "Sustained performance mode not supported on this device.")
+            }
+        } catch (_: Exception) {
+            // Sustained performance mode may not be supported on all devices
+        }
     }
 
     private fun startHighPerformanceCamera() {
@@ -274,8 +320,35 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    override fun onResume() {
+        super.onResume()
+        
+        // Only acquire if we are not thermally throttled
+        val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+        val isThrottling = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            powerManager.currentThermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
+        } else false
+        
+        if (!isThrottling && wakeLock?.isHeld == false) {
+            wakeLock?.acquire(30 * 60 * 1000L)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            thermalListener?.let {
+                val powerManager = getSystemService(POWER_SERVICE) as PowerManager
+                powerManager.removeThermalStatusListener(it)
+            }
+        }
         imageAnalyzer?.close()
         cameraExecutor.shutdown()
         stillExecutor.shutdown()

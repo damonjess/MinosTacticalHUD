@@ -9,8 +9,10 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
@@ -116,26 +118,26 @@ class OnnxImageAnalyzer(
                 val modelBytes = context.assets.open(modelName).use { it.readBytes() }
                 
                 var session: OrtSession? = null
-                val cpuOptions = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(4)
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
-                    try {
-                        addXnnpack(mapOf("intra_op_num_threads" to "4"))
-                    } catch (e: Throwable) {
-                        // XNNPACK provider unsupported or omitted in build
-                    }
-                }
                 try {
-                    session = env.createSession(modelBytes, cpuOptions)
-                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with optimized CPU execution provider (4 threads, ALL_OPT).")
-                } catch (e: Exception) {
-                    Log.w("OnnxImageAnalyzer", "Optimized CPU initialization failed for $modelName (${e.message}). Falling back to basic CPU execution.", e)
-                    val fallbackOptions = OrtSession.SessionOptions().apply {
+                    val nnapiOptions = OrtSession.SessionOptions().apply {
                         setIntraOpNumThreads(4)
+                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                        addNnapi()
                     }
-                    session = env.createSession(modelBytes, fallbackOptions)
-                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with basic CPU execution provider.")
+                    session = env.createSession(modelBytes, nnapiOptions)
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with NNAPI execution provider.")
+                } catch (e: Exception) {
+                    Log.w("OnnxImageAnalyzer", "NNAPI initialization failed for $modelName (${e.message}). Falling back to CPU execution.", e)
+                    val cpuOptions = OrtSession.SessionOptions().apply {
+                        setIntraOpNumThreads(4)
+                        setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                        setExecutionMode(OrtSession.SessionOptions.ExecutionMode.SEQUENTIAL)
+                        try {
+                            addXnnpack(emptyMap())
+                        } catch (_: Throwable) {}
+                    }
+                    session = env.createSession(modelBytes, cpuOptions)
+                    Log.i("OnnxImageAnalyzer", "Successfully loaded $modelName with XNNPACK/CPU execution provider.")
                 }
                 ortSession = session
 
@@ -160,12 +162,38 @@ class OnnxImageAnalyzer(
         }
     }
 
+    private var thermalThrottleCounter = 0
+
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val status = powerManager.currentThermalStatus
+            if (status >= PowerManager.THERMAL_STATUS_MODERATE) {
+                // Tiered frame skipping based on thermal severity
+                val skipModulo = when (status) {
+                    PowerManager.THERMAL_STATUS_EMERGENCY, PowerManager.THERMAL_STATUS_SHUTDOWN -> 10
+                    PowerManager.THERMAL_STATUS_CRITICAL -> 4 // process 1 in 4
+                    PowerManager.THERMAL_STATUS_SEVERE -> 3   // process 1 in 3
+                    else -> 2                                 // process 1 in 2
+                }
+                
+                if (++thermalThrottleCounter % skipModulo != 0) {
+                    imageProxy.close()
+                    return
+                }
+            }
+        }
+
         val s0 = SystemClock.elapsedRealtime()
         val nowRt = s0
-        val ageNs = SystemClock.elapsedRealtimeNanos() - imageProxy.imageInfo.timestamp
-        lastAgeMs = ageNs / 1_000_000L
+        val ts = imageProxy.imageInfo.timestamp
+        val currentElapsed = SystemClock.elapsedRealtimeNanos()
+        val ageNs = if (ts > 0) currentElapsed - ts else -1L
+        if (ts > 0) {
+            Log.d("OnnxImageAnalyzer", "Timestamp check: ts=$ts, elapsedNanos=$currentElapsed, diffMs=${ageNs / 1_000_000L}")
+        }
+        lastAgeMs = if (ageNs in 0L..400_000_000L) ageNs / 1_000_000L else 0L
         val frameTimeMs = if (ageNs in 0L..400_000_000L) nowRt - lastAgeMs else nowRt
 
         mainHandler.post { updateFps() }
@@ -227,15 +255,11 @@ class OnnxImageAnalyzer(
                     if (outputs != null) {
                         val sensitivity = getSensitivityThreshold()
                         val maxDet = getMaxDetections()
-                        val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet) { boxes ->
-                            val w = rotatedBitmap.width
-                            val h = rotatedBitmap.height
-                            mainHandler.post { onBoxesReady(boxes, frameTimeMs, w, h) }
-                        }.toMutableList()
+                        val targets = postProcess(outputs, rotatedBitmap, letterboxInfo, sensitivity, maxDet).toMutableList()
 
                         val s4 = SystemClock.elapsedRealtime()
 
-                        val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, s0)
+                        val plateTargets = updateMagTrackTargets(targets, rotatedBitmap, s0, frameTimeMs)
                         targets.addAll(plateTargets)
 
                         val s5 = SystemClock.elapsedRealtime()
@@ -309,8 +333,7 @@ class OnnxImageAnalyzer(
         sourceBitmap: Bitmap,
         info: LetterboxInfo,
         sensitivityThreshold: Float,
-        maxDetections: Int,
-        onBoxes: (List<YoloTarget>) -> Unit
+        maxDetections: Int
     ): List<YoloTarget> {
         val outputTensor = outputs.get(0) as OnnxTensor
         val buffer = outputTensor.floatBuffer
@@ -410,63 +433,10 @@ class OnnxImageAnalyzer(
         val otherTargets = nmsSelected.filter { it.rawLabel.lowercase().trim() != "person" }
         val balancedTargets = (personTargets + otherTargets).distinctBy { it.id }.take(maxDetections)
 
-        onBoxes(balancedTargets.map { it.copy(label = getTacticalLabel(it.rawLabel)) })
-
-        val nowMs = SystemClock.elapsedRealtime()
-        val thumbDue = nowMs - lastThumbCropMs >= 500
-        if (thumbDue) lastThumbCropMs = nowMs
-
         val finalTargets = balancedTargets.map { target ->
-            val left = (target.xMin * sourceBitmap.width)
-            val top = (target.yMin * sourceBitmap.height)
-            val w = ((target.xMax - target.xMin) * sourceBitmap.width)
-            val h = ((target.yMax - target.yMin) * sourceBitmap.height)
-
-            val padding = BestFrameSelector.getPaddingForLabel(target.rawLabel)
-
-            val padX = w * padding
-            val padY = h * padding
-
-            val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
-            val paddedTop = (top - padY).toInt().coerceAtLeast(0)
-            val paddedRight = (left + w + padX).toInt().coerceAtMost(sourceBitmap.width - 1)
-            val paddedBottom = (top + h + padY).toInt().coerceAtMost(sourceBitmap.height - 1)
-
-            val paddedW = (paddedRight - paddedLeft).coerceAtLeast(1)
-            val paddedH = (paddedBottom - paddedTop).coerceAtLeast(1)
-
-            // Conditional crop allocation to eliminate GC memory churn
-            val isVehicle = target.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
-            val profile = getProfile()
-            val isCaptureOrAuto = getIsCaptureOn() || getAutoMag()
-            val candidateForCapture = isCaptureOrAuto && captureManager.shouldCapture(
-                id = target.id,
-                rawLabel = target.rawLabel,
-                xMin = target.xMin,
-                yMin = target.yMin,
-                xMax = target.xMax,
-                yMax = target.yMax,
-                cooldownMs = profile.captureCooldownMs
-            )
-            val needsCrop = candidateForCapture || (isVehicle && thumbDue)
-
-            val crop = if (needsCrop) {
-                try {
-                    val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
-                    val result = cropped.copy(Bitmap.Config.ARGB_8888, false)
-                    cropped.recycle()
-                    result
-                } catch (e: Exception) {
-                    null
-                }
-            } else {
-                null
-            }
-
             target.copy(
                 label = getTacticalLabel(target.rawLabel),
-                rawLabel = target.rawLabel,
-                crop = crop
+                rawLabel = target.rawLabel
             )
         }
 
@@ -575,7 +545,36 @@ class OnnxImageAnalyzer(
         }
     }
 
-    private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap, startTime: Long): List<YoloTarget> {
+    private fun generateCrop(target: YoloTarget, sourceBitmap: Bitmap): Bitmap? {
+        val left = (target.xMin * sourceBitmap.width)
+        val top = (target.yMin * sourceBitmap.height)
+        val w = ((target.xMax - target.xMin) * sourceBitmap.width)
+        val h = ((target.yMax - target.yMin) * sourceBitmap.height)
+
+        val padding = BestFrameSelector.getPaddingForLabel(target.rawLabel)
+
+        val padX = w * padding
+        val padY = h * padding
+
+        val paddedLeft = (left - padX).toInt().coerceAtLeast(0)
+        val paddedTop = (top - padY).toInt().coerceAtLeast(0)
+        val paddedRight = (left + w + padX).toInt().coerceAtMost(sourceBitmap.width - 1)
+        val paddedBottom = (top + h + padY).toInt().coerceAtMost(sourceBitmap.height - 1)
+
+        val paddedW = (paddedRight - paddedLeft).coerceAtLeast(1)
+        val paddedH = (paddedBottom - paddedTop).coerceAtLeast(1)
+
+        return try {
+            val cropped = Bitmap.createBitmap(sourceBitmap, paddedLeft, paddedTop, paddedW, paddedH)
+            val result = cropped.copy(Bitmap.Config.ARGB_8888, false)
+            cropped.recycle()
+            result
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun updateMagTrackTargets(targets: List<YoloTarget>, fullFrame: Bitmap, startTime: Long, frameTimeMs: Long = SystemClock.elapsedRealtime()): List<YoloTarget> {
         val nowNs = System.nanoTime()
         val dt = if (lastTrackUpdateNs == 0L) {
             0.033f
@@ -598,23 +597,28 @@ class OnnxImageAnalyzer(
             val vehicleCandidates = targets.filter {
                 val raw = it.rawLabel.lowercase().trim()
                 val isVeh = raw in VEHICLE_CLASSES
-                val isLockedMatch = (lockedId == null) || (it.id == lockedId) || activeTracks.any { trk -> trk.id == lockedId && trk.rawLabel.equals(raw, ignoreCase = true) }
-                isVeh && isLockedMatch && it.crop != null && it.crop.width >= 40 && it.crop.height >= 25
+                val isLockedMatch = (lockedId == null) || activeTracks.any { trk -> trk.id == lockedId && trk.rawLabel.equals(raw, ignoreCase = true) }
+                isVeh && isLockedMatch
             }
 
-            val topVehicle = vehicleCandidates.maxWithOrNull(
+            var topVehicle = vehicleCandidates.maxWithOrNull(
                 compareBy<YoloTarget> { (it.xMax - it.xMin) * (it.yMax - it.yMin) }.thenBy { it.confidence }
             )
 
             if (topVehicle != null) {
-                lastPlateDetectionNs = nowNs
-                plateScansCount++
-                processLicensePlateIfVehicleAsync(
-                    vehicle = topVehicle,
-                    fullWidth = fullFrame.width,
-                    fullHeight = fullFrame.height,
-                    lockedId = lockedId
-                )
+                // Ensure crop is generated for plate detection
+                val crop = generateCrop(topVehicle, fullFrame)
+                if (crop != null && crop.width >= 40 && crop.height >= 25) {
+                    topVehicle = topVehicle.copy(crop = crop)
+                    lastPlateDetectionNs = nowNs
+                    plateScansCount++
+                    processLicensePlateIfVehicleAsync(
+                        vehicle = topVehicle,
+                        fullWidth = fullFrame.width,
+                        fullHeight = fullFrame.height,
+                        lockedId = lockedId
+                    )
+                }
             } else if (licensePlateDetector?.isLoaded != true) {
                 // If dedicated plate detector is missing or not loaded, promote any main model plate targets
                 val mainModelPlates = targets.filter {
@@ -622,7 +626,8 @@ class OnnxImageAnalyzer(
                 }
                 for (p in mainModelPlates) {
                     if (plateTargets.none { it.id == p.id }) {
-                        plateTargets.add(p)
+                        val crop = generateCrop(p, fullFrame)
+                        plateTargets.add(p.copy(crop = crop))
                     }
                 }
             }
@@ -638,6 +643,7 @@ class OnnxImageAnalyzer(
         val updatedTracks = mutableListOf<MagTrackTarget>()
         val unassignedTargets = targets.toMutableList()
         val remainingActiveTracks = synchronized(activeTracks) { activeTracks.toMutableList() }
+        val assignedYoloTargets = mutableListOf<YoloTarget>()
 
         // 1. IOU Matching Phase with Clamped Velocity Estimation
         while (remainingActiveTracks.isNotEmpty() && unassignedTargets.isNotEmpty()) {
@@ -698,6 +704,7 @@ class OnnxImageAnalyzer(
                     missedCount = 0
                 )
                 updatedTracks.add(updatedTrack)
+                assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
             } else {
                 break
             }
@@ -762,6 +769,7 @@ class OnnxImageAnalyzer(
                     missedCount = 0
                 )
                 updatedTracks.add(updatedTrack)
+                assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
             } else {
                 break
             }
@@ -781,9 +789,10 @@ class OnnxImageAnalyzer(
         unassignedTargets.take(8 - updatedTracks.size).forEach { yolo ->
             val cx = (yolo.xMin + yolo.xMax) / 2f
             val cy = (yolo.yMin + yolo.yMax) / 2f
+            val trackId = "TRK-${nextTrackId++ % 1000}"
 
             val newTrack = MagTrackTarget(
-                id = "TRACK-${nextTrackId++ % 1000}",
+                id = trackId,
                 trackLabel = "AUTO MAG-TRACK // ${yolo.rawLabel.uppercase()}",
                 rawLabel = yolo.rawLabel,
                 coordinateLabel = "X:${(yolo.xMin * 100).toInt()} Y:${(yolo.yMin * 100).toInt()} Z:${(yolo.confidence * 100).toInt()}%",
@@ -800,15 +809,58 @@ class OnnxImageAnalyzer(
                 missedCount = 0
             )
             updatedTracks.add(newTrack)
+            assignedYoloTargets.add(yolo.copy(id = trackId, label = getTacticalLabel(yolo.rawLabel)))
+        }
+
+        val w = fullFrame.width
+        val h = fullFrame.height
+        mainHandler.post { onBoxesReady(assignedYoloTargets, frameTimeMs, w, h) }
+
+        val nowRt = SystemClock.elapsedRealtime()
+        val thumbDue = nowRt - lastThumbCropMs >= 500
+        if (thumbDue) lastThumbCropMs = nowRt
+
+        val finalUpdatedTracks = updatedTracks.map { track ->
+            val isVehicle = track.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
+            val isCaptureOrAuto = getIsCaptureOn() || getAutoMag()
+            val candidateForCapture = isCaptureOrAuto && captureManager.shouldCapture(
+                id = track.id,
+                rawLabel = track.rawLabel,
+                xMin = track.xMin,
+                yMin = track.yMin,
+                xMax = track.xMax,
+                yMax = track.yMax,
+                cooldownMs = profile.captureCooldownMs,
+                lockedTrackId = lockedId
+            )
+            val needsCrop = candidateForCapture || (isVehicle && thumbDue)
+
+            if (needsCrop) {
+                // We use a temporary YoloTarget to feed generateCrop
+                val dummyYolo = YoloTarget(
+                    id = track.id,
+                    label = track.rawLabel,
+                    rawLabel = track.rawLabel,
+                    confidence = 1f,
+                    xMin = track.xMin,
+                    yMin = track.yMin,
+                    xMax = track.xMax,
+                    yMax = track.yMax
+                )
+                val newCrop = generateCrop(dummyYolo, fullFrame)
+                track.copy(crop = newCrop ?: track.crop)
+            } else {
+                track
+            }
         }
 
         synchronized(activeTracks) {
             activeTracks.clear()
-            activeTracks.addAll(updatedTracks)
+            activeTracks.addAll(finalUpdatedTracks)
         }
 
         if (getIsCaptureOn()) {
-            updatedTracks.forEach { track ->
+            finalUpdatedTracks.forEach { track ->
                 val raw = track.rawLabel.lowercase().trim()
                 val category = when {
                     raw == "person" -> EventCategory.PEOPLE

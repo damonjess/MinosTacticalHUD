@@ -120,11 +120,15 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private var tracks = mutableListOf<Track>()
     private val maxTracks = 15
  
-    private val maxPredictionSec = 0.40f      // how far ahead of the last measurement we will extrapolate
-    private val maxLockedPredictionSec = 0.80f
+    // Applies an exponential decay to the velocity prediction window to prevent "braking overshoot".
+    // A linear ageSec would project targets off into space if the tracker stutters for 1.5s while the object stops.
+    // Damped age acts linearly for small time steps, but asymptotes to a max prediction distance (tau).
+    private fun getDampedAge(ageSec: Float, tau: Float = 0.5f): Float {
+        return tau * (1f - exp(-ageSec / tau))
+    }
     private val maxVelocity = 2.5f            // normalised units / second (250% of screen per second)
-    private val velocityDeadzone = 0.04f      // ignore drift below 4% of screen / second (parked vehicles)
-    private val velocityBlend = 0.60f         // weight of the newest velocity measurement
+    private val velocityDeadzone = 0.03f      // ignore drift below 3% of screen / second (parked vehicles)
+    private val velocityBlend = 0.85f         // weight of the newest velocity measurement
     private val maxMissedFrames = 3
     private val maxLockedMissedFrames = 12
  
@@ -217,9 +221,10 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val pairs = ArrayList<Match>()
  
         for ((ti, tr) in tracks.withIndex()) {
-            val ageSec = ((frameTimeMs - tr.frameTimeMs) / 1000f).coerceIn(0f, maxLockedPredictionSec)
-            val predCx = tr.cx + tr.vx * ageSec
-            val predCy = tr.cy + tr.vy * ageSec
+            val rawAgeSec = max(0f, (frameTimeMs - tr.frameTimeMs) / 1000f)
+            val dampedAge = getDampedAge(rawAgeSec)
+            val predCx = tr.cx + tr.vx * dampedAge
+            val predCy = tr.cy + tr.vy * dampedAge
             val group = classGroup(tr.rawLabel)
             // Big boxes may legitimately move further between frames than small ones.
             val gate = max(0.15f, 1.2f * max(tr.w, tr.h)).coerceAtMost(0.60f)
@@ -295,7 +300,7 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             if (detUsed[di] || kept.size >= maxTracks) continue
             kept.add(
                 Track(
-                    id = "TRK-${++trackCounter}",
+                    id = if (d.id.startsWith("TRK-")) d.id else "TRK-${++trackCounter}",
                     label = d.label,
                     rawLabel = d.rawLabel,
                     confidence = d.confidence,
@@ -342,13 +347,15 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         val ease = 1f - exp(-dtDraw / tau)
  
         for (t in tracks) {
-            val cap = if (t.id == lockedTrackId) maxLockedPredictionSec else maxPredictionSec
             // Age of the measurement (capture -> now), plus a lead of one time-constant so the
             // easing filter does not add a steady lag while the object is moving.
-            val ageSec = (((nowMs - t.frameTimeMs) / 1000f) + tau).coerceIn(0f, cap)
+            val rawAgeSec = max(0f, ((nowMs - t.frameTimeMs) / 1000f) + tau)
+            // Locked targets use a looser dampening to keep tracking through longer occlusion/lag
+            val dampTau = if (t.id == lockedTrackId) 0.75f else 0.5f
+            val dampedAge = getDampedAge(rawAgeSec, dampTau)
  
-            val targetCx = t.cx + t.vx * ageSec
-            val targetCy = t.cy + t.vy * ageSec
+            val targetCx = t.cx + t.vx * dampedAge
+            val targetCy = t.cy + t.vy * dampedAge
  
             t.dCx += (targetCx - t.dCx) * ease
             t.dCy += (targetCy - t.dCy) * ease
@@ -441,9 +448,10 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
         if (isYoloBoxesEnabled) {
             val nowNs = System.nanoTime()
             magTrackTargets.forEach { target ->
-                val ageSec = ((nowNs - target.lastUpdateNs) / 1_000_000_000f).coerceIn(0f, maxPredictionSec)
-                val predX = (target.relX + target.vx * ageSec).coerceIn(0f, 1f)
-                val predY = (target.relY + target.vy * ageSec).coerceIn(0f, 1f)
+                val rawAgeSec = max(0f, (nowNs - target.lastUpdateNs) / 1_000_000_000f)
+                val dampedAge = getDampedAge(rawAgeSec)
+                val predX = (target.relX + target.vx * dampedAge).coerceIn(0f, 1f)
+                val predY = (target.relY + target.vy * dampedAge).coerceIn(0f, 1f)
  
                 val pixelX = predX * scaledW + dx
                 val pixelY = predY * scaledH + dy
