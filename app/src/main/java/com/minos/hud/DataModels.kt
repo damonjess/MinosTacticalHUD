@@ -113,7 +113,7 @@ enum class TrackingProfile(
         detectionMode = DetectionMode.ALL,
         allowedClasses = null,
         plateScanIntervalMs = 300L,
-        boxSmoothingAlpha = 0.85f,
+        boxSmoothingAlpha = 0.92f,
         captureCooldownMs = 5000L,
         cropPaddingFraction = 0.12f,
         isPlateDetectorEnabled = true,

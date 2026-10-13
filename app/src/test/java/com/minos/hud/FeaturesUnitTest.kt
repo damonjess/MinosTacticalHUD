@@ -31,7 +31,7 @@ class FeaturesUnitTest {
         assertTrue(indoorProfile.allowedClasses!!.contains("cat"))
 
         val movingProfile = TrackingProfile.MOVING
-        assertEquals(0.85f, movingProfile.boxSmoothingAlpha, 0.01f)
+        assertEquals(0.92f, movingProfile.boxSmoothingAlpha, 0.01f)
         assertNull(movingProfile.allowedClasses)
     }
 

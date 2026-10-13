@@ -131,11 +131,11 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
     private fun getDampedAge(ageSec: Float, tau: Float = 0.5f): Float {
         return tau * (1f - exp(-ageSec / tau))
     }
-    private val maxVelocity = 2.5f            // normalised units / second (250% of screen per second)
-    private val velocityDeadzone = 0.03f      // ignore drift below 3% of screen / second (parked vehicles)
+    private val maxVelocity = 4.0f            // normalised units / second (250% of screen per second)
+    private val velocityDeadzone = 0.015f      // ignore drift below 3% of screen / second (parked vehicles)
     private val velocityBlend = 0.85f         // weight of the newest velocity measurement
-    private val maxMissedFrames = 3
-    private val maxLockedMissedFrames = 12
+    private val maxMissedFrames = 5
+    private val maxLockedMissedFrames = 18
  
     private val tmpRect = RectF()
  
@@ -232,7 +232,9 @@ class HUDOverlayView(context: Context, attrs: AttributeSet?) : View(context, att
             val predCy = tr.cy + tr.vy * dampedAge
             val group = classGroup(tr.rawLabel)
             // Big boxes may legitimately move further between frames than small ones.
-            val gate = max(0.15f, 1.2f * max(tr.w, tr.h)).coerceAtMost(0.60f)
+            val speed = hypot(tr.vx, tr.vy)
+            val gate = (max(0.15f, 1.2f * max(tr.w, tr.h)) + speed * dampedAge * 1.25f + 0.03f)
+                .coerceAtMost(0.85f)
  
             for ((di, d) in newTargets.withIndex()) {
                 if (classGroup(d.rawLabel) != group) continue

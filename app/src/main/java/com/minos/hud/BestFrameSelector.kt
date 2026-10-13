@@ -231,7 +231,7 @@ class CaptureManager(
         val gridY = (centerY / 0.12f).toInt()
         val spatialKey = "${raw}_${gridX}_${gridY}"
 
-        val spatialCooldownMs = 4_000L
+        val spatialCooldownMs = 1_500L
         val lastSpatialTime = spatialCapturedTimes[spatialKey] ?: 0L
         if (now - lastSpatialTime < spatialCooldownMs) return false
 
@@ -318,8 +318,10 @@ class CaptureManager(
         }
         if (bitmap.width < reqMinW || bitmap.height < reqMinH) return
 
-        // Exposure problem check
-        if (!BestFrameSelector.checkExposure(bitmap)) {
+        // Moving targets can be briefly dark or motion-blurred. Keep rejecting
+        // unusable frames for generic objects, but let person/vehicle captures
+        // compete on sharpness instead of losing the only usable frame.
+        if (!BestFrameSelector.checkExposure(bitmap) && !(isPerson || isVehicle || isAnimal)) {
             return
         }
 
@@ -344,7 +346,7 @@ class CaptureManager(
         val spatialKey = "${raw}_${gridX}_${gridY}"
 
         // Shortened spatial cooldown (4 seconds) so multiple vehicles/people going past are successfully logged
-        val spatialCooldownMs = 4_000L
+        val spatialCooldownMs = 1_500L
         val lastSpatialTime = spatialCapturedTimes[spatialKey] ?: 0L
         if (now - lastSpatialTime < spatialCooldownMs) return
         

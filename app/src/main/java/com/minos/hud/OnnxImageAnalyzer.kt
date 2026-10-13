@@ -23,6 +23,9 @@ import java.nio.FloatBuffer
 import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.hypot
+import kotlin.math.roundToInt
+import kotlin.math.pow
 
 class OnnxImageAnalyzer(
     private val context: Context,
@@ -85,8 +88,106 @@ class OnnxImageAnalyzer(
     private var plateScansCount = 0
     private var expiredTracksCount = 0
 
-    private val trackIouThreshold = 0.20f
+    private val trackIouThreshold = 0.15f
     private val fallbackDistanceSquared = 0.08f
+
+    /** Class grouping prevents car/truck/bus label flicker from breaking a track. */
+    private fun trackingClass(raw: String): String {
+        return when (raw.lowercase().trim()) {
+            "car", "truck", "bus" -> "vehicle"
+            else -> raw.lowercase().trim()
+        }
+    }
+
+    /**
+     * Extract a tiny normalized grayscale patch around a target. This is deliberately
+     * allocation-light and avoids adding a large CV dependency just for inter-frame tracking.
+     */
+    private fun extractTrackTemplate(bitmap: Bitmap, cx: Float, cy: Float): IntArray? {
+        val size = 9
+        val half = 16
+        val out = IntArray(size * size)
+        val centerX = cx.roundToInt()
+        val centerY = cy.roundToInt()
+        var index = 0
+        var sum = 0
+        for (row in 0 until size) {
+            for (col in 0 until size) {
+                val x = (centerX + ((col - 4) * half / 4)).coerceIn(0, bitmap.width - 1)
+                val y = (centerY + ((row - 4) * half / 4)).coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                val value = ((Color.red(pixel) * 299 + Color.green(pixel) * 587 + Color.blue(pixel) * 114) / 1000)
+                out[index++] = value
+                sum += value
+            }
+        }
+        val mean = sum / out.size
+        for (i in out.indices) out[i] = (out[i] - mean + 128).coerceIn(0, 255)
+        return out
+    }
+
+    /** Find the best local patch match near a velocity-predicted position. */
+    private fun trackTemplate(
+        bitmap: Bitmap,
+        track: MagTrackTarget,
+        dt: Float
+    ): Pair<Float, Float>? {
+        val template = track.trackTemplate ?: return null
+        if (template.size != 81 || bitmap.width < 20 || bitmap.height < 20) return null
+        val speed = hypot(track.vx.toDouble(), track.vy.toDouble()).toFloat()
+        val predictedX = track.relX + track.vx * dt
+        val predictedY = track.relY + track.vy * dt
+        val radius = (24f + speed * dt * 900f).coerceIn(24f, 110f)
+        val step = 4
+        var bestError = Float.MAX_VALUE
+        var bestX = predictedX
+        var bestY = predictedY
+        val minX = (predictedX * bitmap.width - radius).toInt().coerceAtLeast(8)
+        val maxX = (predictedX * bitmap.width + radius).toInt().coerceAtMost(bitmap.width - 9)
+        val minY = (predictedY * bitmap.height - radius).toInt().coerceAtLeast(8)
+        val maxY = (predictedY * bitmap.height + radius).toInt().coerceAtMost(bitmap.height - 9)
+        var y = minY
+        while (y <= maxY) {
+            var x = minX
+            while (x <= maxX) {
+                var sum = 0
+                val values = IntArray(81)
+                var i = 0
+                for (row in 0 until 9) {
+                    for (col in 0 until 9) {
+                        val px = (x + ((col - 4) * 16 / 4)).coerceIn(0, bitmap.width - 1)
+                        val py = (y + ((row - 4) * 16 / 4)).coerceIn(0, bitmap.height - 1)
+                        val pixel = bitmap.getPixel(px, py)
+                        val value = (Color.red(pixel) * 299 + Color.green(pixel) * 587 + Color.blue(pixel) * 114) / 1000
+                        values[i++] = value
+                        sum += value
+                    }
+                }
+                val mean = sum / 81
+                var error = 0f
+                for (j in values.indices) error += kotlin.math.abs((values[j] - mean + 128) - template[j])
+                error /= 81f
+                if (error < bestError) {
+                    bestError = error
+                    bestX = x.toFloat() / bitmap.width
+                    bestY = y.toFloat() / bitmap.height
+                }
+                x += step
+            }
+            y += step
+        }
+        return if (bestError <= 44f) bestX to bestY else null
+    }
+
+    /** Copy analyzer-owned pixels before handing them to asynchronous capture work. */
+    private fun copyForCapture(bitmap: Bitmap?): Bitmap? {
+        if (bitmap == null || bitmap.isRecycled) return null
+        return try {
+            bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, false)
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private val labels = listOf(
         "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
@@ -645,6 +746,13 @@ class OnnxImageAnalyzer(
         val remainingActiveTracks = synchronized(activeTracks) { activeTracks.toMutableList() }
         val assignedYoloTargets = mutableListOf<YoloTarget>()
 
+        // Inter-frame local tracking: estimate each active target from the current frame
+        // before YOLO association. YOLO then corrects the local estimate when available.
+        val opticalCenters = mutableMapOf<String, Pair<Float, Float>>()
+        remainingActiveTracks.forEach { track ->
+            trackTemplate(fullFrame, track, dt)?.let { opticalCenters[track.id] = it }
+        }
+
         // 1. IOU Matching Phase with Clamped Velocity Estimation
         while (remainingActiveTracks.isNotEmpty() && unassignedTargets.isNotEmpty()) {
             var bestIou = 0f
@@ -653,14 +761,20 @@ class OnnxImageAnalyzer(
 
             for (tIdx in remainingActiveTracks.indices) {
                 val track = remainingActiveTracks[tIdx]
-                val predXmin = track.xMin + track.vx * dt
-                val predYmin = track.yMin + track.vy * dt
-                val predXmax = track.xMax + track.vx * dt
-                val predYmax = track.yMax + track.vy * dt
+                val optical = opticalCenters[track.id]
+                val predictedCx = optical?.first ?: (track.relX + track.vx * dt)
+                val predictedCy = optical?.second ?: (track.relY + track.vy * dt)
+                val shiftX = predictedCx - track.relX
+                val shiftY = predictedCy - track.relY
+                val predXmin = track.xMin + shiftX
+                val predYmin = track.yMin + shiftY
+                val predXmax = track.xMax + shiftX
+                val predYmax = track.yMax + shiftY
 
                 for (yIdx in unassignedTargets.indices) {
                     val yolo = unassignedTargets[yIdx]
-                    val sameClass = track.rawLabel.isEmpty() || track.rawLabel.equals(yolo.rawLabel, ignoreCase = true)
+                    val sameClass = track.rawLabel.isEmpty() ||
+                        trackingClass(track.rawLabel) == trackingClass(yolo.rawLabel)
                     if (!sameClass) continue
 
                     val iou = calculateIou(
@@ -682,8 +796,8 @@ class OnnxImageAnalyzer(
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-3.0f, 3.0f)
-                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-3.0f, 3.0f)
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-4.0f, 4.0f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-4.0f, 4.0f)
 
                 val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
                 val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
@@ -702,7 +816,9 @@ class OnnxImageAnalyzer(
                     vy = newVy,
                     lastUpdateNs = nowNs,
                     missedCount = 0,
-                    hitCount = matchedTrack.hitCount + 1
+                    hitCount = matchedTrack.hitCount + 1,
+                    trackTemplate = extractTrackTemplate(fullFrame, targetCenterX, targetCenterY),
+                    detectorConfirmed = true
                 )
                 updatedTracks.add(updatedTrack)
                 assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
@@ -719,12 +835,14 @@ class OnnxImageAnalyzer(
 
             for (tIdx in remainingActiveTracks.indices) {
                 val track = remainingActiveTracks[tIdx]
-                val predCx = track.relX + track.vx * dt
-                val predCy = track.relY + track.vy * dt
+                val optical = opticalCenters[track.id]
+                val predCx = optical?.first ?: (track.relX + track.vx * dt)
+                val predCy = optical?.second ?: (track.relY + track.vy * dt)
 
                 for (yIdx in unassignedTargets.indices) {
                     val yolo = unassignedTargets[yIdx]
-                    val sameClass = track.rawLabel.isEmpty() || track.rawLabel.equals(yolo.rawLabel, ignoreCase = true)
+                    val sameClass = track.rawLabel.isEmpty() ||
+                        trackingClass(track.rawLabel) == trackingClass(yolo.rawLabel)
                     if (!sameClass) continue
 
                     val targetCenterX = (yolo.xMin + yolo.xMax) / 2f
@@ -741,15 +859,23 @@ class OnnxImageAnalyzer(
                 }
             }
 
-            if (bestDistSq < fallbackDistanceSquared && bestTrackIdx != -1 && bestTargetIdx != -1) {
+            val fallbackGate = if (bestTrackIdx != -1) {
+                val candidate = remainingActiveTracks[bestTrackIdx]
+                val speed = hypot(candidate.vx.toDouble(), candidate.vy.toDouble()).toFloat()
+                (0.16f + speed * dt * 1.5f + max(candidate.xMax - candidate.xMin, candidate.yMax - candidate.yMin) * 0.75f)
+                    .coerceIn(0.16f, 0.60f)
+            } else {
+                kotlin.math.sqrt(fallbackDistanceSquared)
+            }
+            if (bestDistSq < fallbackGate * fallbackGate && bestTrackIdx != -1 && bestTargetIdx != -1) {
                 val matchedTrack = remainingActiveTracks.removeAt(bestTrackIdx)
                 val matchedTarget = unassignedTargets.removeAt(bestTargetIdx)
 
                 val targetCenterX = (matchedTarget.xMin + matchedTarget.xMax) / 2f
                 val targetCenterY = (matchedTarget.yMin + matchedTarget.yMax) / 2f
 
-                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-3.0f, 3.0f)
-                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-3.0f, 3.0f)
+                val measuredVx = ((targetCenterX - matchedTrack.relX) / dt).coerceIn(-4.0f, 4.0f)
+                val measuredVy = ((targetCenterY - matchedTrack.relY) / dt).coerceIn(-4.0f, 4.0f)
 
                 val newVx = 0.80f * measuredVx + 0.20f * matchedTrack.vx
                 val newVy = 0.80f * measuredVy + 0.20f * matchedTrack.vy
@@ -768,7 +894,9 @@ class OnnxImageAnalyzer(
                     vy = newVy,
                     lastUpdateNs = nowNs,
                     missedCount = 0,
-                    hitCount = matchedTrack.hitCount + 1
+                    hitCount = matchedTrack.hitCount + 1,
+                    trackTemplate = extractTrackTemplate(fullFrame, targetCenterX, targetCenterY),
+                    detectorConfirmed = true
                 )
                 updatedTracks.add(updatedTrack)
                 assignedYoloTargets.add(matchedTarget.copy(id = matchedTrack.id, label = getTacticalLabel(matchedTarget.rawLabel)))
@@ -780,8 +908,33 @@ class OnnxImageAnalyzer(
         // 3. Expire unmatched tracks after 4 missed frames
         for (unmatchedTrack in remainingActiveTracks) {
             val missed = unmatchedTrack.missedCount + 1
-            if (missed <= 4) {
-                updatedTracks.add(unmatchedTrack.copy(missedCount = missed, vx = unmatchedTrack.vx * 0.85f, vy = unmatchedTrack.vy * 0.85f))
+            if (missed <= 6) {
+                val optical = opticalCenters[unmatchedTrack.id]
+                val nextCx = optical?.first ?: (unmatchedTrack.relX + unmatchedTrack.vx * dt)
+                val nextCy = optical?.second ?: (unmatchedTrack.relY + unmatchedTrack.vy * dt)
+                val dx = nextCx - unmatchedTrack.relX
+                val dy = nextCy - unmatchedTrack.relY
+                val next = unmatchedTrack.copy(
+                    relX = nextCx,
+                    relY = nextCy,
+                    xMin = (unmatchedTrack.xMin + dx).coerceIn(0f, 1f),
+                    yMin = (unmatchedTrack.yMin + dy).coerceIn(0f, 1f),
+                    xMax = (unmatchedTrack.xMax + dx).coerceIn(0f, 1f),
+                    yMax = (unmatchedTrack.yMax + dy).coerceIn(0f, 1f),
+                    missedCount = missed,
+                    vx = unmatchedTrack.vx * 0.92f,
+                    vy = unmatchedTrack.vy * 0.92f,
+                    trackTemplate = unmatchedTrack.trackTemplate,
+                    detectorConfirmed = false
+                )
+                updatedTracks.add(next)
+                assignedYoloTargets.add(YoloTarget(
+                    id = next.id,
+                    label = getTacticalLabel(next.rawLabel),
+                    rawLabel = next.rawLabel,
+                    confidence = (0.45f * 0.92f.pow(missed.toFloat())).coerceAtLeast(0.20f),
+                    xMin = next.xMin, yMin = next.yMin, xMax = next.xMax, yMax = next.yMax
+                ))
             } else {
                 expiredTracksCount++
             }
@@ -809,7 +962,9 @@ class OnnxImageAnalyzer(
                 vy = 0f,
                 lastUpdateNs = nowNs,
                 missedCount = 0,
-                hitCount = 1
+                hitCount = 1,
+                trackTemplate = extractTrackTemplate(fullFrame, cx, cy),
+                detectorConfirmed = true
             )
             updatedTracks.add(newTrack)
             assignedYoloTargets.add(yolo.copy(id = trackId, label = getTacticalLabel(yolo.rawLabel)))
@@ -832,7 +987,7 @@ class OnnxImageAnalyzer(
         val finalUpdatedTracks = updatedTracks.map { track ->
             val isVehicle = track.rawLabel.lowercase().trim() in listOf("car", "bus", "truck", "motorcycle")
             val isCaptureOrAuto = getIsCaptureOn() || getAutoMag()
-            val candidateForCapture = isCaptureOrAuto && captureManager.shouldCapture(
+            val candidateForCapture = track.detectorConfirmed && isCaptureOrAuto && captureManager.shouldCapture(
                 id = track.id,
                 rawLabel = track.rawLabel,
                 xMin = track.xMin,
@@ -869,7 +1024,9 @@ class OnnxImageAnalyzer(
         }
 
         // Only process mature tracks for auto capture
-        val matureFinalUpdatedTracks = finalUpdatedTracks.filter { it.hitCount >= minHits || it.id == lockedId }
+        val matureFinalUpdatedTracks = finalUpdatedTracks.filter {
+            (it.hitCount >= minHits || it.id == lockedId) && it.detectorConfirmed && it.missedCount == 0
+        }
 
         if (getIsCaptureOn()) {
             matureFinalUpdatedTracks.forEach { track ->
@@ -884,16 +1041,20 @@ class OnnxImageAnalyzer(
                 if (category != null) {
                     track.crop?.let { bitmap ->
                         val conf = track.coordinateLabel.substringAfter("Z:").substringBefore("%").toFloatOrNull()?.div(100f) ?: 0.5f
-                        captureExecutor.execute {
-                            if (!bitmap.isRecycled) {
-                                val score = BestFrameSelector.calculateScore(bitmap, confidence = conf)
+                        // Bitmap ownership crosses to captureExecutor here. Copy first because
+                        // rotatedBitmap is recycled when analyze() returns.
+                        val captureBitmap = copyForCapture(bitmap)
+                        val captureFullFrame = copyForCapture(fullFrame)
+                        if (captureBitmap != null) captureExecutor.execute {
+                            try {
+                                val score = BestFrameSelector.calculateScore(captureBitmap, confidence = conf)
                                 captureManager.processDetection(
                                     id = track.id,
                                     label = raw.uppercase(),
                                     category = category,
-                                    bitmap = bitmap,
+                                    bitmap = captureBitmap,
                                     score = score,
-                                    fullFrame = fullFrame,
+                                    fullFrame = captureFullFrame,
                                     xMin = track.xMin,
                                     yMin = track.yMin,
                                     xMax = track.xMax,
@@ -908,6 +1069,9 @@ class OnnxImageAnalyzer(
                                     minPlateCropWidth = qualityPreset.minPlateCropWidth,
                                     minPlateCropHeight = qualityPreset.minPlateCropHeight
                                 )
+                            } finally {
+                                if (!captureBitmap.isRecycled) captureBitmap.recycle()
+                                if (captureFullFrame != null && !captureFullFrame.isRecycled) captureFullFrame.recycle()
                             }
                         }
                     }
@@ -916,9 +1080,11 @@ class OnnxImageAnalyzer(
             
             plateTargets.forEach { plateTarget ->
                 plateTarget.crop?.let { bitmap ->
-                    captureExecutor.execute {
-                        if (!bitmap.isRecycled) {
-                            val score = BestFrameSelector.calculateScore(bitmap, confidence = plateTarget.confidence)
+                    val captureBitmap = copyForCapture(bitmap)
+                    val captureFullFrame = copyForCapture(fullFrame)
+                    if (captureBitmap != null) captureExecutor.execute {
+                        try {
+                            val score = BestFrameSelector.calculateScore(captureBitmap, confidence = plateTarget.confidence)
                             
                             val cx = (plateTarget.xMin + plateTarget.xMax) / 2f
                             val cy = (plateTarget.yMin + plateTarget.yMax) / 2f
@@ -938,9 +1104,9 @@ class OnnxImageAnalyzer(
                                 id = plateId,
                                 label = "LICENSE PLATE",
                                 category = EventCategory.PLATES,
-                                bitmap = bitmap,
+                                bitmap = captureBitmap,
                                 score = score,
-                                fullFrame = fullFrame,
+                                fullFrame = captureFullFrame,
                                 xMin = plateTarget.xMin,
                                 yMin = plateTarget.yMin,
                                 xMax = plateTarget.xMax,
@@ -955,6 +1121,9 @@ class OnnxImageAnalyzer(
                                 minPlateCropWidth = qualityPreset.minPlateCropWidth,
                                 minPlateCropHeight = qualityPreset.minPlateCropHeight
                             )
+                        } finally {
+                            if (!captureBitmap.isRecycled) captureBitmap.recycle()
+                            if (captureFullFrame != null && !captureFullFrame.isRecycled) captureFullFrame.recycle()
                         }
                     }
                 }

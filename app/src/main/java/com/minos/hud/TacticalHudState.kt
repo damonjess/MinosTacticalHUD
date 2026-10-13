@@ -23,7 +23,10 @@ data class MagTrackTarget(
     val vy: Float = 0f,
     val lastUpdateNs: Long = System.nanoTime(),
     val missedCount: Int = 0,
-    val hitCount: Int = 1
+    val hitCount: Int = 1,
+    val trackTemplate: IntArray? = null,
+    // False means this state came only from prediction/local tracking, not a fresh detector box.
+    val detectorConfirmed: Boolean = true
 )
 
 data class YoloTarget(
